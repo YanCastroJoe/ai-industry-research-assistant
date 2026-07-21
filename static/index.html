@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 产业研究助手</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">EVIDENCE-FIRST RESEARCH WORKFLOW</p>
+        <h1>AI 产业研究助手</h1>
+        <p class="subtitle">将公司、产业与宏观材料转化为可审核、可追溯的研究卡片。</p>
+      </header>
+
+      <section class="notice"><strong>研究边界：</strong>系统整理事实、原文证据与待验证项，不预测价格，不提供买卖建议。</section>
+
+      <section class="grid">
+        <form id="research-form" class="panel form-panel">
+          <div class="panel-title"><span>01</span><h2>新建研究任务</h2></div>
+          <label>任务标题<input id="title" maxlength="100" placeholder="例如：算力产业政策材料解读" /></label>
+          <label>材料类型
+            <select id="material-type">
+              <option value="auto">自动识别</option>
+              <option value="company">公司材料</option>
+              <option value="industry">产业材料</option>
+              <option value="macro">宏观材料</option>
+            </select>
+          </label>
+          <label>粘贴研究材料<textarea id="text" minlength="10" placeholder="粘贴公告、产业政策、行业供需或宏观材料……"></textarea></label>
+          <label>或上传 PDF / TXT / Markdown<input id="file" type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" /></label>
+          <button id="submit" type="submit">生成证据研究卡片</button>
+          <p id="form-message" class="form-message"></p>
+        </form>
+
+        <section class="panel" id="detail-panel">
+          <div class="panel-title"><span>02</span><h2>研究卡片</h2></div>
+          <div id="empty-state" class="empty">提交材料后，这里会显示事实、原文证据、影响链路与待验证项。</div>
+          <article id="card" hidden></article>
+        </section>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="panel-title"><span>03</span><h2>研究历史</h2></div>
+        <div id="task-list" class="task-list"></div>
+      </section>
+    </main>
+    <template id="card-template">
+      <div class="card-head"><div><p class="eyebrow card-type"></p><h2 class="card-title"></h2></div><span class="status"></span></div>
+      <p class="summary"></p>
+      <div class="mode-note"></div>
+      <section><h3>事实与原文证据</h3><div class="facts"></div></section>
+      <section class="industry-panel"><h3>产业链推演</h3><p class="industry-judgment"></p><h4>传导链路</h4><ol class="causal-chain"></ol><h4>产业方向与验证条件</h4><ul class="direction-analysis"></ul><h4>风险与反转条件</h4><ul class="risk-reversals"></ul></section>
+      <section><h3>影响维度</h3><div class="chips dimensions"></div></section>
+      <section><h3>影响链路</h3><ol class="chain"></ol></section>
+      <section><h3>待验证项</h3><ul class="verification"></ul></section>
+      <section class="review"><h3>人工审核</h3><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="export-message"></p></section>
+      <p class="risk"></p>
+    </template>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
