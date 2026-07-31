@@ -1,0 +1,22 @@
+[
+  {"id":"weekly_report","goal":"生成本周项目周报","required_tools":["retrieve_documents","extract_facts","compose_document","verify_citations"]},
+  {"id":"risk_list","goal":"生成项目风险清单","required_tools":["retrieve_documents","extract_facts","generate_risk_register","verify_citations"]},
+  {"id":"slide_outline","goal":"生成三页项目汇报大纲","required_tools":["retrieve_documents","extract_facts","generate_slide_outline","verify_citations"]},
+  {"id":"report_and_table","goal":"生成项目周报和问题清单表","required_tools":["compose_document","generate_risk_register","verify_citations"]},
+  {"id":"report_and_slides","goal":"生成项目周报和 PPT 汇报大纲","required_tools":["compose_document","generate_slide_outline","verify_citations"]},
+  {"id":"milestone_table","goal":"整理里程碑与交付物表格","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"kpi_table","goal":"生成本周 KPI 数据表","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"issue_list","goal":"生成待解决问题清单","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"review_notes","goal":"起草评审会议纪要","required_tools":["compose_document","verify_citations"]},
+  {"id":"status_update","goal":"编写项目进展同步文档","required_tools":["compose_document","verify_citations"]},
+  {"id":"stakeholder_brief","goal":"生成干系人沟通汇报","required_tools":["compose_document","generate_slide_outline","verify_citations"]},
+  {"id":"release_checklist","goal":"生成发布前检查清单","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"decision_record","goal":"整理项目决策记录","required_tools":["compose_document","verify_citations"]},
+  {"id":"retro_summary","goal":"生成项目复盘总结","required_tools":["compose_document","verify_citations"]},
+  {"id":"delivery_tracker","goal":"生成交付跟踪表","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"management_update","goal":"生成管理层项目汇报 PPT 大纲","required_tools":["generate_slide_outline","verify_citations"]},
+  {"id":"resource_request","goal":"编写资源申请说明","required_tools":["compose_document","verify_citations"]},
+  {"id":"dependency_map","goal":"生成外部依赖与风险表","required_tools":["generate_risk_register","verify_citations"]},
+  {"id":"team_brief","goal":"生成团队协作同步文档","required_tools":["compose_document","verify_citations"]},
+  {"id":"full_pack","goal":"生成本周项目周报、风险清单、数据表和三页汇报大纲","required_tools":["compose_document","generate_risk_register","generate_slide_outline","verify_citations"]}
+]
