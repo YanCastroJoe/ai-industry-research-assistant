@@ -40,6 +40,13 @@ class DocflowTaskRequest(BaseModel):
     title: str = Field(default="未命名协作任务", max_length=100)
     goal: str = Field(min_length=5, max_length=1000)
     text: str = Field(min_length=20, max_length=60000)
+    session_id: str = Field(default="default", min_length=1, max_length=100)
+
+
+class MemoryRequest(BaseModel):
+    session_id: str = Field(default="default", min_length=1, max_length=100)
+    memory_key: str = Field(min_length=2, max_length=100)
+    content: str = Field(min_length=2, max_length=1000)
 
 
 @app.get("/", include_in_schema=False)
@@ -132,19 +139,31 @@ def export_task(task_id: int) -> PlainTextResponse:
 
 @app.post("/api/docflow/tasks", status_code=201)
 def create_docflow_task(request: DocflowTaskRequest) -> dict:
-    return _run_docflow_task(request.title, request.goal, request.text)
+    return _run_docflow_task(request.title, request.goal, request.text, request.session_id)
 
 
-def _run_docflow_task(title_value: str, goal_value: str, text: str) -> dict:
+def _run_docflow_task(title_value: str, goal_value: str, text: str, session_id: str = "default") -> dict:
     title = title_value.strip() or "未命名协作任务"
     goal = goal_value.strip()
-    task = docflow_repository.create_task(title, goal, text)
-    run_id = docflow_repository.create_run(task["id"])
+    task = docflow_repository.create_task(title, goal, text, session_id.strip() or "default")
+    return _execute_docflow_task(task)
+
+
+def _execute_docflow_task(task: dict, resume: dict | None = None) -> dict:
+    parent_run_id = resume["run_id"] if resume else None
+    run_id = docflow_repository.create_run(task["id"], parent_run_id=parent_run_id)
+    memory_context = docflow_repository.recall_memories(task["session_id"], task["goal"])
     try:
         result = docflow_runtime.execute(
-            goal,
-            text,
+            task["goal"],
+            task["source_text"],
             trace_callback=lambda step: docflow_repository.record_step(run_id, step),
+            checkpoint_callback=lambda state, next_sequence: docflow_repository.save_checkpoint(run_id, state, next_sequence),
+            plan_callback=lambda plan, planner: docflow_repository.save_plan(task["id"], run_id, plan, planner["mode"]),
+            plan=task["plan"] if resume else None,
+            resume_state=resume["checkpoint"] if resume else None,
+            start_sequence=resume["next_sequence"] if resume else 1,
+            memory_context=memory_context,
         )
         return docflow_repository.complete_run(task["id"], run_id, result["plan"], result)
     except Exception as error:
@@ -157,6 +176,7 @@ async def create_docflow_task_from_file(
     file: UploadFile = File(...),
     title: str = Form(default="未命名协作任务"),
     goal: str = Form(...),
+    session_id: str = Form(default="default"),
 ) -> dict:
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
@@ -168,7 +188,7 @@ async def create_docflow_task_from_file(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     fallback_title = (file.filename or "未命名协作任务").rsplit(".", 1)[0]
-    return _run_docflow_task(title.strip() or fallback_title, goal, text)
+    return _run_docflow_task(title.strip() or fallback_title, goal, text, session_id)
 
 
 @app.get("/api/docflow/tasks")
@@ -182,6 +202,32 @@ def get_docflow_task(task_id: int) -> dict:
         return docflow_repository.get_task(task_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="协作任务不存在") from error
+
+
+@app.post("/api/docflow/tasks/{task_id}/retry")
+def retry_docflow_task(task_id: int) -> dict:
+    try:
+        task = docflow_repository.get_task(task_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="协作任务不存在") from error
+    resume = docflow_repository.latest_failed_checkpoint(task_id)
+    if task["status"] != "failed" or resume is None:
+        raise HTTPException(status_code=409, detail="当前任务没有可恢复的失败检查点")
+    return _execute_docflow_task(task, resume=resume)
+
+
+@app.post("/api/docflow/memories", status_code=201)
+def add_docflow_memory(request: MemoryRequest) -> dict:
+    return docflow_repository.add_memory(
+        request.session_id.strip() or "default",
+        request.memory_key.strip(),
+        request.content.strip(),
+    )
+
+
+@app.get("/api/docflow/memories/{session_id}")
+def list_docflow_memories(session_id: str) -> list[dict]:
+    return docflow_repository.list_memories(session_id)
 
 
 @app.post("/api/docflow/tasks/{task_id}/review")
