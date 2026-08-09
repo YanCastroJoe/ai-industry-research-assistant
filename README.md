@@ -58,6 +58,14 @@ python -m venv .venv
 
 打开 `http://127.0.0.1:8010`。不配置模型密钥时使用确定性 RulePlanner 和本地语义规则；配置 `.env` 后启用模型规划与受证据约束的内容理解。
 
+面试演示推荐直接运行：
+
+```powershell
+.\start-demo.ps1
+```
+
+另开一个 PowerShell 执行 `.\check-demo.ps1`，看到 `[PASS]` 后即可按 [DocFlow 面试演示手册](DEMO.md) 完成三分钟演示。
+
 ## 验证
 
 ```powershell
