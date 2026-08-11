@@ -1,0 +1,30 @@
+services:
+  docflow:
+    build:
+      context: .
+    container_name: docflow-demo
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    environment:
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.deepseek.com/v1}
+      MODEL_NAME: ${MODEL_NAME:-deepseek-chat}
+    volumes:
+      - docflow_data:/app/data
+    mem_limit: 640m
+    cpus: 0.75
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  docflow_data:

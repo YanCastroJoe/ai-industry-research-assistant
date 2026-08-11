@@ -3,5 +3,6 @@ starlette==0.41.3
 uvicorn[standard]==0.34.0
 pypdf==5.1.0
 python-multipart==0.0.20
+python-dotenv==1.0.1
 mcp==1.28.1
 sse-starlette==2.1.3
