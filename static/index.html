@@ -14,12 +14,14 @@
         <p class="subtitle">把工作区材料和自然语言目标，转成可追溯、可审核的文档协作产出。</p>
       </header>
 
-      <section class="notice"><strong>运行方式：</strong>Planner 先生成任务计划；Runtime 再按计划调用工具。每一步的参数、结果摘要、耗时和异常都会保留在 Agent Trace 中。</section>
+      <section class="notice"><strong>运行方式：</strong>Planner 生成并校验任务计划，Runtime 按超时/重试策略调用工具；失败时从最近检查点恢复。步骤参数、尝试次数、耗时和异常均保留在 Agent Trace 中。</section>
 
       <section class="grid">
         <form id="docflow-form" class="panel form-panel">
           <div class="panel-title"><span>01</span><h2>创建协作任务</h2></div>
           <label>任务名称<input id="title" maxlength="100" placeholder="例如：项目周报与风险清单" /></label>
+          <label>会话 ID<input id="session-id" maxlength="100" value="default" placeholder="例如：project-alpha" /></label>
+          <label>本会话协作偏好（可选）<input id="memory" maxlength="1000" placeholder="例如：管理层汇报优先展示风险、负责人和截止时间" /></label>
           <label>协作目标<textarea id="goal" class="goal-input" minlength="5" placeholder="例如：基于这些材料生成本周项目周报、风险清单和三页汇报大纲；每条结论标注来源。"></textarea></label>
           <label>粘贴工作区材料<textarea id="text" minlength="20" placeholder="粘贴会议纪要、需求文档、项目进展、表格内容……"></textarea></label>
           <label>或上传 PDF / TXT / Markdown<input id="file" type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" /></label>
@@ -42,14 +44,15 @@
 
     <template id="card-template">
       <div class="card-head"><div><p class="eyebrow card-type">DOCUMENT AGENT RUN</p><h2 class="card-title"></h2><p class="card-goal"></p><p class="mode-note task-mode"></p></div><span class="status"></span></div>
+      <section><h3>运行概览</h3><p class="mode-note run-metrics"></p></section>
       <section><h3>执行计划</h3><ol class="plan"></ol></section>
       <section class="trace-panel"><h3>Agent Trace</h3><div class="trace-list"></div></section>
       <section><h3>项目周报</h3><pre class="artifact document"></pre></section>
       <section class="artifact-wrap table-wrap" hidden><h3>风险与行动清单</h3><div class="artifact table"></div></section>
       <section class="artifact-wrap slides-wrap" hidden><h3>汇报大纲</h3><pre class="artifact slides"></pre></section>
       <section><h3>引用校验</h3><p class="verification-result"></p><div class="evidence-list"></div></section>
-      <section class="review"><h3>人工审核</h3><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section>
+      <section class="review"><h3>人工审核</h3><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section>
     </template>
-    <script src="/static/app.js?v=20260731-4"></script>
+    <script src="/static/app.js?v=20260807-1"></script>
   </body>
 </html>

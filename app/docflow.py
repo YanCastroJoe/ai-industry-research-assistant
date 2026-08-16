@@ -10,20 +10,38 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .execution import ExecutionPolicy, ToolExecutionFailed, invoke_with_policy
+from .planning import SafePlanner, build_rule_plan
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
     name: str
     description: str
     handler: Callable[..., Any]
+    input_schema: dict[str, Any]
+    source: str = "local"
 
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
 
-    def register(self, name: str, description: str, handler: Callable[..., Any]) -> None:
-        self._tools[name] = ToolDefinition(name=name, description=description, handler=handler)
+    def register(
+        self,
+        name: str,
+        description: str,
+        handler: Callable[..., Any],
+        input_schema: dict[str, Any] | None = None,
+        source: str = "local",
+    ) -> None:
+        self._tools[name] = ToolDefinition(
+            name=name,
+            description=description,
+            handler=handler,
+            input_schema=input_schema or {"type": "object", "properties": {}},
+            source=source,
+        )
 
     def call(self, name: str, **kwargs: Any) -> Any:
         if name not in self._tools:
@@ -33,22 +51,21 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def describe(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "source": tool.source,
+            }
+            for tool in self._tools.values()
+        ]
+
 
 def build_plan(goal: str) -> list[dict[str, str]]:
     """Create an inspectable plan; deliverable tools are chosen from the user's goal."""
-    plan = [
-        {"phase": "retrieve", "tool_name": "retrieve_documents", "purpose": "定位与任务相关的原文证据"},
-        {"phase": "extract", "tool_name": "extract_facts", "purpose": "从证据中提取可引用事实"},
-        {"phase": "reason", "tool_name": "derive_task_insights", "purpose": "在证据约束下识别进展、风险、行动项与汇报重点"},
-        {"phase": "compose", "tool_name": "compose_document", "purpose": "生成结构化项目周报和待确认项"},
-    ]
-    lowered = goal.lower()
-    if any(word in goal for word in ("风险", "清单", "问题", "表", "指标", "kpi", "数据")) or "table" in lowered:
-        plan.append({"phase": "format", "tool_name": "generate_risk_register", "purpose": "生成含等级、影响、负责人和截止时间的风险/行动清单"})
-    if any(word in goal for word in ("汇报", "ppt", "演示", "幻灯")) or "slides" in lowered:
-        plan.append({"phase": "format", "tool_name": "generate_slide_outline", "purpose": "生成带证据的三页汇报大纲"})
-    plan.append({"phase": "verify", "tool_name": "verify_citations", "purpose": "校验输出引用是否可追溯"})
-    return plan
+    return build_rule_plan(goal)
 
 
 def _sentences(text: str) -> list[str]:
@@ -240,11 +257,14 @@ def _normalize_insights(raw: dict[str, Any], facts: list[dict[str, str]]) -> dic
     return insights
 
 
-def derive_task_insights(goal: str, facts: list[dict[str, str]]) -> dict[str, Any]:
-    """One guarded LLM call for semantic understanding; facts and citation IDs stay system-owned."""
+def derive_task_insights(goal: str, facts: list[dict[str, str]], memory_context: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    """One guarded LLM call; memory guides preferences but never acts as factual evidence."""
+    memory_context = memory_context or []
     api_key = os.getenv("MODEL_API_KEY", "")
     if not api_key:
-        return _fallback_insights(goal, facts)
+        fallback = _fallback_insights(goal, facts)
+        fallback["memory_used"] = len(memory_context)
+        return fallback
     evidence_payload = [{"id": fact["citation"], "fact": fact["claim"]} for fact in facts]
     system_prompt = """你是企业协作文档 Agent 的任务理解模块。仅能依据输入证据，不得补充外部事实。
 请严格返回 JSON 对象，字段为 weekly_summary、weekly_summary_evidence_ids、progress、milestones、risks、actions、slide_outline。
@@ -252,6 +272,7 @@ progress 的元素为 {content,evidence_ids}；milestones 为 {content,due,evide
 risks 为 {risk,level(高|中|低|待确认),impact,owner,due,evidence_ids}；
 weekly_summary_evidence_ids 为支撑周报摘要的证据编号数组；actions 为 {content,owner,due,evidence_ids}；slide_outline 为 3 项 {title,content,evidence_ids}。
 每个 evidence_ids 只能引用输入中存在的 E 编号；材料未出现的负责人或日期必须写“待确认”。
+session_preferences 只用于输出结构和表达偏好，不能作为事实或引用来源。
 如果用户要求风险清单，优先识别阻塞项、版本/质量、接口依赖、安全审核和排期风险；不要把项目目标误写成风险。"""
     system_prompt += " 当用户要求风险清单时，应尽量列出有独立根因的风险，避免把同一风险拆成重复条目；风险证据中已经出现负责人或日期时必须保留。"
     payload = {
@@ -260,7 +281,13 @@ weekly_summary_evidence_ids 为支撑周报摘要的证据编号数组；actions
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps({"goal": goal, "evidence": evidence_payload}, ensure_ascii=False)},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"goal": goal, "evidence": evidence_payload, "session_preferences": memory_context},
+                    ensure_ascii=False,
+                ),
+            },
         ],
     }
     base_url = os.getenv("MODEL_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
@@ -274,10 +301,13 @@ weekly_summary_evidence_ids 为支撑周报摘要的证据编号数组；actions
         with urllib.request.urlopen(request, timeout=45) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
         content = response_payload["choices"][0]["message"]["content"]
-        return _normalize_insights(_extract_json(content), facts)
+        insights = _normalize_insights(_extract_json(content), facts)
+        insights["memory_used"] = len(memory_context)
+        return insights
     except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError, json.JSONDecodeError):
         fallback = _fallback_insights(goal, facts)
         fallback["mode"] = "rules_fallback"
+        fallback["memory_used"] = len(memory_context)
         return fallback
 
 
@@ -343,39 +373,146 @@ def verify_citations(artifacts: dict[str, str], evidence: list[dict[str, str]]) 
 
 
 class AgentRuntime:
-    def __init__(self, registry: ToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry | None = None,
+        planner: Any | None = None,
+        default_policy: ExecutionPolicy | None = None,
+        tool_policies: dict[str, ExecutionPolicy] | None = None,
+    ) -> None:
         self.registry = registry or ToolRegistry()
         if not self.registry.names():
-            self.registry.register("retrieve_documents", "检索工作区原文证据", retrieve_documents)
-            self.registry.register("extract_facts", "抽取可引用事实", extract_facts)
-            self.registry.register("derive_task_insights", "受证据约束地理解交付目标", derive_task_insights)
-            self.registry.register("compose_document", "生成结构化项目周报", compose_document)
-            self.registry.register("generate_risk_register", "生成风险与行动清单", generate_risk_register)
-            self.registry.register("generate_slide_outline", "生成三页汇报大纲", generate_slide_outline)
-            self.registry.register("verify_citations", "校验输出中的证据引用", verify_citations)
+            object_schema = {"type": "object", "properties": {}}
+            self.registry.register(
+                "retrieve_documents",
+                "检索工作区原文证据",
+                retrieve_documents,
+                {"type": "object", "properties": {"query": {"type": "string"}, "source_text": {"type": "string"}}, "required": ["query", "source_text"]},
+            )
+            self.registry.register("extract_facts", "抽取可引用事实", extract_facts, object_schema)
+            self.registry.register("derive_task_insights", "受证据约束地理解交付目标", derive_task_insights, object_schema)
+            self.registry.register("compose_document", "生成结构化项目周报", compose_document, object_schema)
+            self.registry.register("generate_risk_register", "生成风险与行动清单", generate_risk_register, object_schema)
+            self.registry.register("generate_slide_outline", "生成三页汇报大纲", generate_slide_outline, object_schema)
+            self.registry.register("verify_citations", "校验输出中的证据引用", verify_citations, object_schema)
+        self.planner = planner or SafePlanner()
+        self.default_policy = default_policy or ExecutionPolicy()
+        self.tool_policies = tool_policies or {}
 
-    def execute(self, goal: str, source_text: str, trace_callback: Callable[[dict], None] | None = None) -> dict:
-        plan = build_plan(goal)
-        state: dict[str, Any] = {"goal": goal, "source_text": source_text, "evidence": [], "facts": [], "insights": {}, "artifacts": {}}
+    def execute(
+        self,
+        goal: str,
+        source_text: str,
+        trace_callback: Callable[[dict], None] | None = None,
+        checkpoint_callback: Callable[[dict[str, Any], int], None] | None = None,
+        plan_callback: Callable[[list[dict[str, str]], dict[str, str]], None] | None = None,
+        *,
+        plan: list[dict[str, str]] | None = None,
+        resume_state: dict[str, Any] | None = None,
+        start_sequence: int = 1,
+        memory_context: list[dict[str, str]] | None = None,
+    ) -> dict:
+        started_run = time.perf_counter()
+        if plan is None:
+            planner_decision = self.planner.create_plan(goal, self.registry.describe())
+            plan = planner_decision.plan
+            planner_mode = planner_decision.mode
+            planner_fallback_reason = planner_decision.fallback_reason
+        else:
+            planner_mode = "resume"
+            planner_fallback_reason = ""
+        if plan_callback:
+            plan_callback(plan, {"mode": planner_mode, "fallback_reason": planner_fallback_reason})
+        state: dict[str, Any] = {
+            "goal": goal,
+            "source_text": source_text,
+            "memory_context": memory_context or [],
+            "evidence": [],
+            "facts": [],
+            "insights": {},
+            "artifacts": {},
+        }
+        if resume_state:
+            state.update(resume_state)
+            state["goal"] = goal
+            state["source_text"] = source_text
+            state["memory_context"] = memory_context or state.get("memory_context", [])
         trace: list[dict] = []
         for sequence, step in enumerate(plan, start=1):
+            if sequence < start_sequence:
+                continue
             tool_name = step["tool_name"]
             tool_input = self._tool_input(tool_name, state)
-            started = time.perf_counter()
             try:
-                output = self.registry.call(tool_name, **tool_input)
+                output, attempts = invoke_with_policy(
+                    lambda: self.registry.call(tool_name, **tool_input),
+                    self.tool_policies.get(tool_name, self.default_policy),
+                )
                 self._save_output(tool_name, output, state)
-                event = {"sequence": sequence, "phase": step["phase"], "tool_name": tool_name, "status": "completed", "input": tool_input, "output": self._trace_output(output), "error": "", "elapsed_ms": round((time.perf_counter() - started) * 1000)}
-            except Exception as error:  # pragma: no cover - defensive runtime boundary
-                event = {"sequence": sequence, "phase": step["phase"], "tool_name": tool_name, "status": "failed", "input": tool_input, "output": {}, "error": str(error), "elapsed_ms": round((time.perf_counter() - started) * 1000)}
-                trace.append(event)
-                if trace_callback:
-                    trace_callback(event)
+                for attempt in attempts:
+                    event = self._event(sequence, step, tool_input, attempt, output if attempt["status"] == "completed" else None)
+                    trace.append(event)
+                    if trace_callback:
+                        trace_callback(event)
+                if checkpoint_callback:
+                    checkpoint_callback(self._checkpoint_state(state), sequence + 1)
+            except ToolExecutionFailed as error:
+                for attempt in error.attempts:
+                    event = self._event(sequence, step, tool_input, attempt, None)
+                    trace.append(event)
+                    if trace_callback:
+                        trace_callback(event)
                 raise
-            trace.append(event)
-            if trace_callback:
-                trace_callback(event)
-        return {"plan": plan, "evidence": state["evidence"], "facts": state["facts"], "insights": state["insights"], "artifacts": state["artifacts"], "verification": state["verification"], "trace": trace}
+        completed_steps = len({event["sequence"] for event in trace if event["status"] == "completed"})
+        retry_count = sum(event["status"] == "retrying" for event in trace)
+        return {
+            "plan": plan,
+            "planner": {"mode": planner_mode, "fallback_reason": planner_fallback_reason},
+            "memory": {"items_used": len(state.get("memory_context", []))},
+            "evidence": state["evidence"],
+            "facts": state["facts"],
+            "insights": state["insights"],
+            "artifacts": state["artifacts"],
+            "verification": state["verification"],
+            "trace": trace,
+            "metrics": {
+                "elapsed_ms": round((time.perf_counter() - started_run) * 1000),
+                "executed_steps": completed_steps,
+                "attempts": len(trace),
+                "retry_count": retry_count,
+                "tool_success_rate": round(completed_steps / max(len(plan) - start_sequence + 1, 1), 4),
+            },
+        }
+
+    @staticmethod
+    def _event(
+        sequence: int,
+        step: dict[str, str],
+        tool_input: dict[str, Any],
+        attempt: dict[str, Any],
+        output: Any | None,
+    ) -> dict[str, Any]:
+        return {
+            "sequence": sequence,
+            "attempt": attempt["attempt"],
+            "phase": step["phase"],
+            "tool_name": step["tool_name"],
+            "status": attempt["status"],
+            "input": tool_input,
+            "output": AgentRuntime._trace_output(output) if output is not None else {},
+            "error": attempt.get("error", ""),
+            "error_type": attempt.get("error_type", ""),
+            "retryable": attempt.get("retryable", False),
+            "elapsed_ms": attempt["elapsed_ms"],
+        }
+
+    @staticmethod
+    def _checkpoint_state(state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in state.items()
+            if key in {"memory_context", "evidence", "facts", "insights", "artifacts", "verification"}
+        }
 
     @staticmethod
     def _tool_input(tool_name: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -384,7 +521,7 @@ class AgentRuntime:
         if tool_name == "extract_facts":
             return {"evidence": state["evidence"]}
         if tool_name == "derive_task_insights":
-            return {"goal": state["goal"], "facts": state["facts"]}
+            return {"goal": state["goal"], "facts": state["facts"], "memory_context": state.get("memory_context", [])}
         if tool_name == "compose_document":
             return {"goal": state["goal"], "insights": state["insights"]}
         if tool_name in {"generate_risk_register", "generate_slide_outline"}:

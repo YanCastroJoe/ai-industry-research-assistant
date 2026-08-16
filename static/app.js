@@ -44,9 +44,13 @@ function renderTask(task) {
   node.querySelector('.card-title').textContent = task.title;
   node.querySelector('.card-goal').textContent = `目标：${task.goal}`;
   const mode = task.result?.insights?.mode;
-  node.querySelector('.task-mode').textContent = mode === 'model'
-    ? '语义分析：已使用受证据约束的模型生成交付内容。'
-    : '语义分析：当前使用本地规则生成；请配置模型密钥以获得更强的任务理解能力。';
+  const plannerMode = task.result?.planner?.mode || task.runs?.[0]?.planner_mode || '未执行';
+  const memoryUsed = task.result?.memory?.items_used || 0;
+  node.querySelector('.task-mode').textContent = `${mode === 'model' ? '模型语义分析' : '本地规则分析'} · Planner：${plannerMode} · Session Memory：${memoryUsed} 条`;
+  const metrics = task.result?.metrics || {};
+  node.querySelector('.run-metrics').textContent = metrics.elapsed_ms === undefined
+    ? '任务尚未完成，暂无完整运行指标。'
+    : `耗时 ${metrics.elapsed_ms} ms · 工具步骤 ${metrics.executed_steps} · 尝试 ${metrics.attempts} 次 · 重试 ${metrics.retry_count} 次 · 成功率 ${Math.round((metrics.tool_success_rate || 0) * 100)}%`;
   const status = node.querySelector('.status');
   status.textContent = statusLabels[task.status] || task.status;
   status.classList.add(task.status);
@@ -64,7 +68,7 @@ function renderTask(task) {
     const item = document.createElement('article');
     item.className = `trace ${step.status}`;
     const output = step.output?.preview ? (typeof step.output.preview === 'string' ? step.output.preview : JSON.stringify(step.output.preview)) : JSON.stringify(step.output || {});
-    item.innerHTML = `<div><strong>${escapeHtml(step.sequence)}. ${escapeHtml(step.tool_name)}</strong><span>${escapeHtml(step.status)} · ${escapeHtml(String(step.elapsed_ms))} ms</span></div><p>${escapeHtml(output)}</p>${step.error ? `<p class="trace-error">${escapeHtml(step.error)}</p>` : ''}`;
+    item.innerHTML = `<div><strong>${escapeHtml(step.sequence)}. ${escapeHtml(step.tool_name)}（尝试 ${escapeHtml(String(step.attempt || 1))}）</strong><span>${escapeHtml(step.status)} · ${escapeHtml(String(step.elapsed_ms))} ms</span></div><p>${escapeHtml(output)}</p>${step.error ? `<p class="trace-error">${escapeHtml(step.error)}</p>` : ''}`;
     traceList.append(item);
   });
 
@@ -114,12 +118,34 @@ function renderTask(task) {
   } else if (task.status === 'awaiting_review') {
     node.querySelector('.approve').addEventListener('click', (event) => reviewTask(task.id, 'approve', reviewNote.value, event.currentTarget, reviewMessage));
     node.querySelector('.reject').addEventListener('click', (event) => reviewTask(task.id, 'reject', reviewNote.value, event.currentTarget, reviewMessage));
+  } else if (task.status === 'failed') {
+    review.querySelector('textarea').hidden = true;
+    review.querySelector('.approve').hidden = true;
+    review.querySelector('.reject').hidden = true;
+    const retryButton = review.querySelector('.retry');
+    retryButton.hidden = false;
+    retryButton.addEventListener('click', () => retryTask(task.id, retryButton, reviewMessage));
   } else {
     review.innerHTML = '<h3>人工审核</h3><p>当前任务尚未进入审核阶段。</p>';
   }
   cardHost.replaceChildren(node);
   cardHost.hidden = false;
   emptyState.hidden = true;
+}
+
+async function retryTask(taskId, button, feedback) {
+  button.disabled = true;
+  button.textContent = '正在从检查点恢复…';
+  feedback.textContent = '';
+  try {
+    const task = await (await request(`/api/docflow/tasks/${taskId}/retry`, { method: 'POST' })).json();
+    renderTask(task);
+    await loadTasks();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = '从检查点恢复';
+    feedback.textContent = `恢复失败：${error.message}`;
+  }
 }
 
 async function loadTasks() {
@@ -169,21 +195,31 @@ form.addEventListener('submit', async (event) => {
   const title = document.querySelector('#title').value;
   const goal = document.querySelector('#goal').value;
   const text = document.querySelector('#text').value;
+  const sessionId = document.querySelector('#session-id').value.trim() || 'default';
+  const memory = document.querySelector('#memory').value.trim();
   const selectedFile = document.querySelector('#file').files[0];
   submit.disabled = true;
   submit.textContent = 'Planner 正在生成计划…';
   try {
     if (goal.trim().length < 5) throw new Error('请至少输入 5 个字的协作目标。');
+    if (memory) {
+      await request('/api/docflow/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, memory_key: '协作偏好', content: memory }),
+      });
+    }
     let response;
     if (selectedFile) {
       const payload = new FormData();
       payload.append('file', selectedFile);
       payload.append('title', title || selectedFile.name);
       payload.append('goal', goal);
+      payload.append('session_id', sessionId);
       response = await request('/api/docflow/tasks/file', { method: 'POST', body: payload });
     } else {
       if (text.trim().length < 20) throw new Error('请粘贴至少 20 个字的工作区材料，或上传一个文件。');
-      response = await request('/api/docflow/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title || '未命名协作任务', goal, text }) });
+      response = await request('/api/docflow/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title || '未命名协作任务', goal, text, session_id: sessionId }) });
     }
     renderTask(await response.json());
     await loadTasks();
