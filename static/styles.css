@@ -397,3 +397,88 @@ button, .export { min-height: 40px; font-size: 13px; }
 .evaluation-task-link { font-size: 13px; }
 .evaluation-table td:first-child small { font-size: 11px; }
 .evaluation-notice { font-size: 12px; line-height: 1.65; }
+
+/* Product structure: task-first workspace, progressive disclosure and
+   result-first inspection. Existing backend fields remain available. */
+.sidebar-toggle { margin-left: auto; width: 28px; min-height: 28px; padding: 0; border: 1px solid rgba(255,255,255,.12); color: #cbd1dc; background: rgba(255,255,255,.06); font-size: 20px; line-height: 1; }
+.sidebar-toggle:hover { color: #fff; background: rgba(255,255,255,.12); }
+.nav-item b { overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell.sidebar-collapsed { grid-template-columns: 72px 0 minmax(0,1fr); }
+.app-shell.sidebar-collapsed .sidebar { padding-inline: 10px; }
+.app-shell.sidebar-collapsed .brand { justify-content: center; padding-inline: 0; }
+.app-shell.sidebar-collapsed .brand-copy,
+.app-shell.sidebar-collapsed .nav-item b,
+.app-shell.sidebar-collapsed .sidebar-section,
+.app-shell.sidebar-collapsed .environment-card { display: none; }
+.app-shell.sidebar-collapsed .sidebar-toggle { position: absolute; top: 67px; width: 24px; min-height: 24px; }
+.app-shell.sidebar-collapsed .nav { margin-top: 24px; }
+.app-shell.sidebar-collapsed .nav-item { justify-content: center; padding-inline: 0; }
+.app-shell.sidebar-collapsed .nav-item span { width: auto; font-size: 16px; }
+.app-shell.sidebar-collapsed .sidebar-resizer { display: none; }
+
+.main-view { margin-top: 22px; }
+.workflow-disclosure { margin-bottom: 18px; border: 1px solid var(--line); border-radius: 13px; background: #fff; box-shadow: 0 1px 2px rgba(16,24,40,.02); }
+.workflow-disclosure summary { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 14px; padding: 13px 16px; color: var(--muted); cursor: pointer; list-style: none; }
+.workflow-disclosure summary::-webkit-details-marker { display: none; }
+.workflow-disclosure summary > span { color: var(--primary); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.workflow-disclosure summary strong { overflow: hidden; color: #3f4756; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-disclosure summary small { color: var(--subtle); font-size: 11px; }
+.workflow-disclosure[open] summary { border-bottom: 1px solid var(--line); }
+.workflow-disclosure .capability-strip { margin: 0; border: 0; border-radius: 0 0 13px 13px; box-shadow: none; }
+
+.primary-inputs { padding-top: 18px; }
+.primary-inputs label > small { color: var(--subtle); font-size: 10px; font-weight: 500; }
+.primary-inputs textarea { min-height: 190px; }
+.primary-inputs .goal-input { min-height: 104px; }
+.advanced-settings { margin: 15px -20px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: linear-gradient(180deg,#fafaff,#fff); }
+.advanced-settings summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; cursor: pointer; }
+.advanced-settings summary span { color: #394150; font-size: 13px; font-weight: 750; }
+.advanced-settings summary small { color: var(--subtle); font-size: 10px; }
+.advanced-settings-body { padding: 3px 20px 14px; }
+.advanced-settings .form-heading-row { margin: 5px 0 12px; }
+
+.result-tabs { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; margin: 14px 0 0; padding: 4px; border-radius: 10px; background: #f3f4f7; }
+.result-tab { min-width: 0; min-height: 36px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 12px; }
+.result-tab:hover { color: var(--primary); background: #fff; }
+.result-tab.active { color: var(--primary); background: #fff; box-shadow: 0 1px 4px rgba(16,24,40,.10); }
+.result-view { animation: result-view-in .16s ease-out; }
+@keyframes result-view-in { from { opacity: .45; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+.view-heading { display: flex; justify-content: space-between; align-items: end; margin-bottom: 16px; }
+.view-heading h2 { margin: 0; font-size: 24px; }
+.view-heading > div > p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+.history-list { display: grid; gap: 10px; }
+.history-item { width: 100%; display: grid; grid-template-columns: minmax(0,1fr) auto auto; justify-content: stretch; gap: 18px; padding: 16px 18px; border: 1px solid var(--line); color: var(--ink); background: #fff; text-align: left; box-shadow: 0 1px 2px rgba(16,24,40,.03); }
+.history-item:hover { border-color: #b9b6ff; background: #fbfbff; }
+.history-item span:first-child { min-width: 0; }
+.history-item strong, .history-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item strong { font-size: 14px; }
+.history-item small { margin-top: 5px; color: var(--subtle); font-size: 11px; }
+.history-item b { align-self: center; color: var(--primary); font-size: 12px; white-space: nowrap; }
+
+@media (min-width: 1121px) {
+  .workspace-grid { grid-template-columns: minmax(370px,440px) minmax(560px,1fr); }
+}
+
+@media (max-width: 900px) {
+  .app-shell.sidebar-collapsed { display: block; }
+  .app-shell.sidebar-collapsed .sidebar { padding: 14px 18px; }
+  .app-shell.sidebar-collapsed .brand { justify-content: flex-start; padding: 0 8px 13px; }
+  .app-shell.sidebar-collapsed .brand-copy,
+  .app-shell.sidebar-collapsed .nav-item b { display: block; }
+  .app-shell.sidebar-collapsed .nav { margin-top: 0; }
+  .app-shell.sidebar-collapsed .nav-item { justify-content: center; padding: 10px 11px; }
+  .app-shell.sidebar-collapsed .nav-item span { width: 20px; font-size: inherit; }
+  .sidebar-toggle { display: none; }
+  .main-view { margin-top: 16px; }
+  .workflow-disclosure summary { grid-template-columns: 1fr auto; }
+  .workflow-disclosure summary strong { grid-column: 1 / -1; grid-row: 2; }
+  .history-item { grid-template-columns: minmax(0,1fr) auto; }
+  .history-item b { display: none; }
+}
+
+@media (max-width: 620px) {
+  .workflow-disclosure summary small { display: none; }
+  .result-tabs { grid-template-columns: 1fr 1fr; }
+  .advanced-settings summary { align-items: flex-start; flex-direction: column; }
+}

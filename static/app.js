@@ -8,12 +8,17 @@ const refreshEvaluationButton = document.querySelector('#refresh-evaluation');
 const jobProgress = document.querySelector('#job-progress');
 const appShell = document.querySelector('.app-shell');
 const sidebarResizer = document.querySelector('#sidebar-resizer');
+const sidebarToggle = document.querySelector('#sidebar-toggle');
+const historyList = document.querySelector('#history-list');
+const navItems = [...document.querySelectorAll('[data-section-target]')];
+const resultTabs = [...document.querySelectorAll('[data-result-target]')];
 let activeTaskId = null;
 
 const SIDEBAR_DEFAULT_WIDTH = 248;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_STORAGE_KEY = 'docflow.sidebarWidth';
+const SIDEBAR_COLLAPSED_KEY = 'docflow.sidebarCollapsed';
 
 function clampSidebarWidth(width) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
@@ -72,6 +77,46 @@ function setupSidebarResize() {
 }
 
 setupSidebarResize();
+
+function setSidebarCollapsed(collapsed, persist = true) {
+  appShell.classList.toggle('sidebar-collapsed', collapsed);
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggle.setAttribute('aria-label', collapsed ? '展开侧边栏' : '收起侧边栏');
+  sidebarToggle.textContent = collapsed ? '›' : '‹';
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed)); } catch (_) { /* Storage may be disabled. */ }
+  }
+}
+
+function activateMainView(targetId) {
+  document.querySelectorAll('.main-view').forEach((view) => {
+    const active = view.id === targetId;
+    view.hidden = !active;
+    view.classList.toggle('active', active);
+  });
+  navItems.forEach((item) => item.classList.toggle('active', item.dataset.sectionTarget === targetId));
+}
+
+function activateResultView(target) {
+  resultTabs.forEach((tab) => {
+    const active = tab.dataset.resultTarget === target;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  cardHost.querySelectorAll('[data-result-view]').forEach((view) => {
+    const active = view.dataset.resultView === target;
+    view.hidden = !active;
+    view.classList.toggle('active', active);
+  });
+}
+
+try { setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true', false); } catch (_) { setSidebarCollapsed(false, false); }
+sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!appShell.classList.contains('sidebar-collapsed')));
+navItems.forEach((item) => item.addEventListener('click', (event) => {
+  event.preventDefault();
+  activateMainView(item.dataset.sectionTarget);
+}));
+resultTabs.forEach((tab) => tab.addEventListener('click', () => activateResultView(tab.dataset.resultTarget)));
 
 const statusLabels = {
   queued: '排队中', running: '运行中', awaiting_review: '待人工审核', approved: '审核通过', rejected: '已驳回', failed: '运行失败',
@@ -365,6 +410,7 @@ function renderTask(task) {
   cardHost.replaceChildren(node);
   cardHost.hidden = false;
   emptyState.hidden = true;
+  activateResultView('result');
 }
 
 async function retryTask(taskId, button, feedback) {
@@ -389,6 +435,18 @@ async function loadTasks() {
     item.className = `task ${task.id === activeTaskId ? 'active' : ''}`;
     item.innerHTML = `<h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span></p>`;
     item.addEventListener('click', async () => renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json()));
+    return item;
+  }));
+  historyList.replaceChildren(...tasks.map((task) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'history-item';
+    item.innerHTML = `<span><strong>${escapeHtml(task.title)}</strong><small>任务 #${escapeHtml(String(task.id))}</small></span><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span><b>查看详情 →</b>`;
+    item.addEventListener('click', async () => {
+      renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json());
+      activateMainView('workspace-view');
+      document.querySelector('#detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     return item;
   }));
   loadEvaluationSummary().catch((error) => { document.querySelector('.evaluation-notice').textContent = `评测数据加载失败：${error.message}`; });

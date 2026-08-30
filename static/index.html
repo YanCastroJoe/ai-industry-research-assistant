@@ -4,20 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFlow 协作式文档 Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260830-2" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260830-3" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">D</span>
-          <div><strong>DocFlow</strong><small>Document Agent</small></div>
+          <div class="brand-copy"><strong>DocFlow</strong><small>Document Agent</small></div>
+          <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="收起侧边栏" aria-expanded="true">‹</button>
         </div>
 
         <nav class="nav" aria-label="工作区导航">
-          <a class="nav-item active" href="#workspace"><span>⌘</span>Agent 工作台</a>
-          <a class="nav-item" href="#task-history"><span>↻</span>运行记录</a>
-          <a class="nav-item" href="#evaluation-dashboard"><span>◇</span>AgentOps 评测</a>
+          <a class="nav-item active" href="#workspace-view" data-section-target="workspace-view"><span>⌘</span><b>Agent 工作台</b></a>
+          <a class="nav-item" href="#history-view" data-section-target="history-view"><span>↻</span><b>运行记录</b></a>
+          <a class="nav-item" href="#evaluation-dashboard" data-section-target="evaluation-dashboard"><span>◇</span><b>质量评测</b></a>
         </nav>
 
         <div class="sidebar-section" id="task-history">
@@ -57,86 +58,54 @@
           </div>
         </header>
 
-        <section class="capability-strip" aria-label="运行架构">
-          <div><span class="capability-icon">P</span><p><strong>SafePlanner</strong><small>计划校验与规则回退</small></p></div>
-          <span class="flow-arrow">→</span>
-          <div><span class="capability-icon">T</span><p><strong>Tool Registry</strong><small>本地与 MCP 工具调度</small></p></div>
-          <span class="flow-arrow">→</span>
-          <div><span class="capability-icon">R</span><p><strong>Agent Runtime</strong><small>Trace、重试与检查点</small></p></div>
-          <span class="flow-arrow">→</span>
-          <div><span class="capability-icon">✓</span><p><strong>Human Review</strong><small>引用校验后审核导出</small></p></div>
-        </section>
+        <section id="workspace-view" class="main-view active">
+          <details class="workflow-disclosure">
+            <summary><span>运行链路</span><strong>SafePlanner → Tool Registry → Agent Runtime → Human Review</strong><small>查看架构说明</small></summary>
+            <div class="capability-strip" aria-label="运行架构">
+              <div><span class="capability-icon">P</span><p><strong>SafePlanner</strong><small>计划校验与规则回退</small></p></div>
+              <span class="flow-arrow">→</span>
+              <div><span class="capability-icon">T</span><p><strong>Tool Registry</strong><small>本地与 MCP 工具调度</small></p></div>
+              <span class="flow-arrow">→</span>
+              <div><span class="capability-icon">R</span><p><strong>Agent Runtime</strong><small>Trace、重试与检查点</small></p></div>
+              <span class="flow-arrow">→</span>
+              <div><span class="capability-icon">✓</span><p><strong>Human Review</strong><small>引用校验后审核导出</small></p></div>
+            </div>
+          </details>
 
-        <section class="workspace-grid">
+          <section class="workspace-grid">
           <form id="docflow-form" class="panel composer-panel">
             <div class="panel-header">
               <div><p class="section-kicker">NEW RUN</p><h2>创建协作任务</h2></div>
               <span class="panel-badge">01</span>
             </div>
 
-            <div class="form-section">
-              <h3>任务上下文</h3>
-              <label>任务名称<input id="title" maxlength="100" placeholder="例如：项目周报与风险清单" /></label>
-              <div class="field-grid">
-                <label>会话 ID<input id="session-id" maxlength="100" value="default" placeholder="project-alpha" /></label>
-                <label>运行方式
-                  <select id="run-mode">
-                    <option value="async" selected>异步运行 · 推荐</option>
-                    <option value="sync">同步运行 · 调试</option>
-                  </select>
-                </label>
-              </div>
-              <label>协作偏好<input id="memory" maxlength="1000" placeholder="风险优先" /></label>
+            <div class="form-section primary-inputs">
+              <label>任务名称 <small>选填</small><input id="title" maxlength="100" placeholder="例如：项目周报与风险清单" /></label>
+              <label>你希望 Agent 完成什么？<textarea id="goal" class="goal-input" minlength="5" placeholder="例如：生成项目周报、风险清单和下一步行动，并为结论标注来源。"></textarea></label>
+              <label>粘贴工作材料<textarea id="text" minlength="20" placeholder="会议纪要、需求文档、项目进展或表格内容……"></textarea></label>
+              <label class="file-field"><span>或上传 PDF / TXT / Markdown</span><input id="file" type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" /></label>
             </div>
 
-            <div class="form-section context-config-section">
-              <div class="form-heading-row">
-                <h3>Context Engineering</h3>
-                <span>分层、裁剪与约束</span>
+            <details class="advanced-settings">
+              <summary><span>高级设置</span><small>会话、运行方式与 Context Engineering</small></summary>
+              <div class="advanced-settings-body">
+                <div class="field-grid">
+                  <label>会话 ID<input id="session-id" maxlength="100" value="default" placeholder="project-alpha" /></label>
+                  <label>运行方式
+                    <select id="run-mode"><option value="async" selected>异步运行 · 推荐</option><option value="sync">同步运行 · 调试</option></select>
+                  </label>
+                </div>
+                <label>协作偏好<input id="memory" maxlength="1000" placeholder="例如：面向管理层，风险优先" /></label>
+                <div class="form-heading-row"><h3>Context Engineering</h3><span>分层、裁剪与约束</span></div>
+                <div class="field-grid">
+                  <label>目标受众<select id="audience"><option value="项目团队">项目团队</option><option value="管理层">管理层</option><option value="技术团队">技术团队</option><option value="客户与业务方">客户与业务方</option></select></label>
+                  <label>信息焦点<select id="context-focus"><option value="balanced">均衡呈现</option><option value="risk">风险优先</option><option value="progress">进展优先</option><option value="actions">行动项优先</option></select></label>
+                  <label>证据预算<select id="evidence-limit"><option value="6">精简 · 6 条</option><option value="9">标准 · 9 条</option><option value="12" selected>完整 · 12 条</option></select></label>
+                  <label>引用策略<select id="citation-policy"><option value="strict">严格 · Evidence ID</option><option value="standard">标准 · 输出后校验</option></select></label>
+                </div>
+                <label class="toggle-row"><input id="memory-enabled" type="checkbox" checked /><span><strong>启用 Session Memory</strong><small>仅注入协作偏好，不作为事实或引用来源</small></span></label>
               </div>
-              <div class="field-grid">
-                <label>目标受众
-                  <select id="audience">
-                    <option value="项目团队">项目团队</option>
-                    <option value="管理层">管理层</option>
-                    <option value="技术团队">技术团队</option>
-                    <option value="客户与业务方">客户与业务方</option>
-                  </select>
-                </label>
-                <label>信息焦点
-                  <select id="context-focus">
-                    <option value="balanced">均衡呈现</option>
-                    <option value="risk">风险优先</option>
-                    <option value="progress">进展优先</option>
-                    <option value="actions">行动项优先</option>
-                  </select>
-                </label>
-                <label>证据预算
-                  <select id="evidence-limit">
-                    <option value="6">精简 · 6 条</option>
-                    <option value="9">标准 · 9 条</option>
-                    <option value="12" selected>完整 · 12 条</option>
-                  </select>
-                </label>
-                <label>引用策略
-                  <select id="citation-policy">
-                    <option value="strict">严格 · Evidence ID</option>
-                    <option value="standard">标准 · 输出后校验</option>
-                  </select>
-                </label>
-              </div>
-              <label class="toggle-row">
-                <input id="memory-enabled" type="checkbox" checked />
-                <span><strong>启用 Session Memory</strong><small>仅注入协作偏好，不作为事实或引用来源</small></span>
-              </label>
-            </div>
-
-            <div class="form-section">
-              <h3>目标与材料</h3>
-              <label>协作目标<textarea id="goal" class="goal-input" minlength="5" placeholder="说明需要生成的文档、关注重点和引用要求。"></textarea></label>
-              <label>工作区材料<textarea id="text" minlength="20" placeholder="粘贴会议纪要、需求文档、项目进展或表格内容……"></textarea></label>
-              <label class="file-field"><span>上传 PDF / TXT / Markdown</span><input id="file" type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" /></label>
-            </div>
+            </details>
 
             <div class="submit-row">
               <p><span class="health-dot"></span>执行过程将记录完整 Trace</p>
@@ -155,6 +124,12 @@
               <div><p class="section-kicker">RUN INSPECTOR</p><h2>运行详情</h2></div>
               <span class="panel-badge">02</span>
             </div>
+            <nav class="result-tabs" aria-label="运行详情">
+              <button class="result-tab active" type="button" data-result-target="result" aria-selected="true">结果</button>
+              <button class="result-tab" type="button" data-result-target="trace" aria-selected="false">执行步骤</button>
+              <button class="result-tab" type="button" data-result-target="citations" aria-selected="false">引用</button>
+              <button class="result-tab" type="button" data-result-target="review" aria-selected="false">人工审核</button>
+            </nav>
             <div id="empty-state" class="empty-state">
               <div class="empty-visual" aria-hidden="true">
                 <span>目标</span><i></i><span>计划</span><i></i><span>工具</span><i></i><span>审核</span>
@@ -169,9 +144,15 @@
             </div>
             <article id="card" hidden></article>
           </section>
+          </section>
         </section>
 
-        <section class="panel evaluation-dashboard" id="evaluation-dashboard">
+        <section id="history-view" class="main-view" hidden>
+          <div class="view-heading"><div><p class="section-kicker">RUN HISTORY</p><h2>运行记录</h2><p>选择一条任务，回到工作台查看产出、执行步骤、引用与审核状态。</p></div></div>
+          <div id="history-list" class="history-list"></div>
+        </section>
+
+        <section class="panel evaluation-dashboard main-view" id="evaluation-dashboard" hidden>
           <div class="evaluation-header">
             <div><p class="section-kicker">AGENTOPS / EVALUATION</p><h2>运行质量与反馈闭环</h2><p>聚合 Trace、Verifier 与人工审核结果，检查当前本地任务样本是否通过质量门禁。</p></div>
             <button id="refresh-evaluation" class="secondary" type="button">刷新观测</button>
@@ -192,16 +173,20 @@
         <span class="status"></span>
       </div>
       <div class="run-context"><p class="task-mode"></p></div>
-      <section><div class="section-heading"><h3>运行概览</h3><span>Run metrics</span></div><div class="run-metrics metric-grid"></div></section>
-      <section class="context-panel"><div class="section-heading"><h3>Context Engineering</h3><span>Context manifest</span></div><div class="context-summary"></div><div class="context-layers"></div><ul class="context-policies"></ul></section>
-      <section><div class="section-heading"><h3>执行计划</h3><span>Validated plan</span></div><ol class="plan"></ol></section>
-      <section class="trace-panel"><div class="section-heading"><h3>Agent 执行链路</h3><span>Interactive trace graph</span></div><div class="execution-flow" aria-label="Agent 执行链路"></div><div class="trace-detail"></div></section>
-      <section><div class="section-heading"><h3>项目周报</h3><span>Generated artifact</span></div><pre class="artifact document"></pre></section>
-      <section class="artifact-wrap table-wrap" hidden><div class="section-heading"><h3>风险与行动清单</h3><span>Structured output</span></div><div class="artifact table"></div></section>
-      <section class="artifact-wrap slides-wrap" hidden><div class="section-heading"><h3>汇报大纲</h3><span>Generated artifact</span></div><pre class="artifact slides"></pre></section>
-      <section><div class="section-heading"><h3>引用校验</h3><span>Evidence verification</span></div><p class="verification-result"></p><div class="evidence-list"></div></section>
-      <section class="review"><div class="section-heading"><h3>人工审核</h3><span>Human in the loop</span></div><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section>
+      <div class="result-view active" data-result-view="result">
+        <section><div class="section-heading"><h3>运行概览</h3><span>Run metrics</span></div><div class="run-metrics metric-grid"></div></section>
+        <section><div class="section-heading"><h3>项目周报</h3><span>Generated artifact</span></div><pre class="artifact document"></pre></section>
+        <section class="artifact-wrap table-wrap" hidden><div class="section-heading"><h3>风险与行动清单</h3><span>Structured output</span></div><div class="artifact table"></div></section>
+        <section class="artifact-wrap slides-wrap" hidden><div class="section-heading"><h3>汇报大纲</h3><span>Generated artifact</span></div><pre class="artifact slides"></pre></section>
+      </div>
+      <div class="result-view" data-result-view="trace" hidden>
+        <section class="context-panel"><div class="section-heading"><h3>Context Engineering</h3><span>Context manifest</span></div><div class="context-summary"></div><div class="context-layers"></div><ul class="context-policies"></ul></section>
+        <section><div class="section-heading"><h3>执行计划</h3><span>Validated plan</span></div><ol class="plan"></ol></section>
+        <section class="trace-panel"><div class="section-heading"><h3>Agent 执行链路</h3><span>Interactive trace graph</span></div><div class="execution-flow" aria-label="Agent 执行链路"></div><div class="trace-detail"></div></section>
+      </div>
+      <div class="result-view" data-result-view="citations" hidden><section><div class="section-heading"><h3>引用校验</h3><span>Evidence verification</span></div><p class="verification-result"></p><div class="evidence-list"></div></section></div>
+      <div class="result-view" data-result-view="review" hidden><section class="review"><div class="section-heading"><h3>人工审核</h3><span>Human in the loop</span></div><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section></div>
     </template>
-    <script src="/static/app.js?v=20260830-2"></script>
+    <script src="/static/app.js?v=20260830-3"></script>
   </body>
 </html>
