@@ -36,7 +36,8 @@ class DocflowApiV2Tests(unittest.TestCase):
             self.assertEqual(payload["database"]["journal_mode"], "wal")
             self.assertEqual(payload["database"]["busy_timeout_ms"], 5000)
             self.assertEqual(payload["queue"]["max_pending"], 3)
-            self.assertFalse(payload["boundaries"]["queued_jobs_durable"])
+            self.assertTrue(payload["boundaries"]["queued_jobs_durable"])
+            self.assertFalse(payload["boundaries"]["running_jobs_resumable"])
             coordinator.shutdown()
 
     def test_idempotency_key_reuses_task_and_rejects_changed_payload(self) -> None:
@@ -62,7 +63,7 @@ class DocflowApiV2Tests(unittest.TestCase):
             self.assertEqual(conflict.status_code, 409)
             coordinator.shutdown()
 
-    def test_repository_marks_interrupted_jobs_failed_on_restart_recovery(self) -> None:
+    def test_repository_preserves_queued_jobs_and_fails_interrupted_running_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = DocflowRepository(Path(directory) / "recovery.db")
             queued = repository.create_task("等待任务", "生成项目周报", SOURCE)
@@ -70,12 +71,35 @@ class DocflowApiV2Tests(unittest.TestCase):
             repository.mark_task_running(running["id"])
             repository.create_run(running["id"])
 
-            self.assertEqual(repository.recover_interrupted_tasks(), 2)
-            self.assertEqual(repository.get_task(queued["id"])["status"], "failed")
+            recovery = repository.recover_interrupted_tasks()
+            self.assertEqual([task["id"] for task in recovery["queued_tasks"]], [queued["id"]])
+            self.assertEqual(recovery["failed_running"], 1)
+            self.assertEqual(repository.get_task(queued["id"])["status"], "queued")
             recovered = repository.get_task(running["id"])
             self.assertEqual(recovered["status"], "failed")
             self.assertEqual(recovered["runs"][0]["status"], "failed")
             self.assertIn("进程重启", recovered["runs"][0]["error"])
+
+    def test_restart_requeues_durable_queued_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = JobCoordinator(max_workers=1, max_pending=3)
+            main.docflow_repository = DocflowRepository(Path(directory) / "durable-queue.db")
+            main.docflow_runtime = AgentRuntime(planner=RulePlanner())
+            main.job_coordinator = coordinator
+            task = main.docflow_repository.create_task("重启恢复任务", "生成项目周报", SOURCE)
+
+            report = main._recover_persisted_jobs()
+            self.assertEqual(report["recovered_queued"], 1)
+            self.assertEqual(report["failed_running"], 0)
+
+            deadline = time.time() + 5
+            recovered = main.docflow_repository.get_task(task["id"])
+            while time.time() < deadline and recovered["status"] not in {"awaiting_review", "failed"}:
+                time.sleep(0.05)
+                recovered = main.docflow_repository.get_task(task["id"])
+            self.assertEqual(recovered["status"], "awaiting_review")
+            self.assertEqual(recovered["runs"][0]["status"], "completed")
+            coordinator.shutdown()
 
     def test_async_job_returns_immediately_and_exposes_lifecycle_progress(self) -> None:
         class BlockingRuntime(AgentRuntime):

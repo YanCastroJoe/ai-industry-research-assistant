@@ -12,7 +12,10 @@ class JsonEventFormatter(logging.Formatter):
             "level": record.levelname,
             "event": getattr(record, "event", record.getMessage()),
         }
-        for key in ("request_id", "task_id", "status", "method", "path", "elapsed_ms", "detail"):
+        for key in (
+            "request_id", "task_id", "status", "method", "path", "elapsed_ms", "detail",
+            "recovered_queued", "failed_running", "failed_to_requeue",
+        ):
             value = getattr(record, key, None)
             if value is not None and value != "":
                 payload[key] = value

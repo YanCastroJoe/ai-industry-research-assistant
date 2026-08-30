@@ -200,26 +200,31 @@ class DocflowRepository:
                     created = False
         return self.get_task(task_id), created
 
-    def recover_interrupted_tasks(self) -> int:
-        """Close stale in-process jobs after a single-instance application restart."""
-        message = "应用进程重启导致后台任务中断，请重新提交任务。"
+    def recover_interrupted_tasks(self) -> dict:
+        """Return durable queued jobs and close jobs interrupted while running."""
+        message = "应用进程重启导致执行中的后台任务中断，请从检查点重试或重新提交任务。"
         with self._connect() as connection:
-            interrupted = connection.execute(
-                "SELECT id FROM docflow_tasks WHERE status IN ('queued', 'running')"
+            queued = connection.execute(
+                "SELECT id FROM docflow_tasks WHERE status = 'queued' ORDER BY id"
             ).fetchall()
-            if not interrupted:
-                return 0
-            task_ids = [row["id"] for row in interrupted]
-            placeholders = ",".join("?" for _ in task_ids)
-            connection.execute(
-                f"UPDATE docflow_tasks SET status = 'failed', reviewer_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
-                (message, *task_ids),
-            )
-            connection.execute(
-                f"UPDATE docflow_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE status = 'running' AND task_id IN ({placeholders})",
-                (message, *task_ids),
-            )
-        return len(task_ids)
+            running = connection.execute(
+                "SELECT id FROM docflow_tasks WHERE status = 'running' ORDER BY id"
+            ).fetchall()
+            running_ids = [row["id"] for row in running]
+            if running_ids:
+                placeholders = ",".join("?" for _ in running_ids)
+                connection.execute(
+                    f"UPDATE docflow_tasks SET status = 'failed', reviewer_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                    (message, *running_ids),
+                )
+                connection.execute(
+                    f"UPDATE docflow_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE status = 'running' AND task_id IN ({placeholders})",
+                    (message, *running_ids),
+                )
+        return {
+            "queued_tasks": [self.get_task(row["id"]) for row in queued],
+            "failed_running": len(running_ids),
+        }
 
     def create_run(self, task_id: int, parent_run_id: int | None = None) -> int:
         with self._connect() as connection:

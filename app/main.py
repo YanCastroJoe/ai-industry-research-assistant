@@ -30,7 +30,6 @@ runtime_config = load_runtime_config()
 event_logger = configure_event_logger()
 repository = TaskRepository(ROOT / "data" / "research.db")
 docflow_repository = DocflowRepository(ROOT / "data" / "research.db")
-docflow_repository.recover_interrupted_tasks()
 docflow_runtime = AgentRuntime()
 job_coordinator = JobCoordinator(
     max_workers=runtime_config.max_workers,
@@ -547,8 +546,44 @@ def readiness() -> JSONResponse:
         "runtime": runtime_config.public_dict(),
         "boundaries": {
             "queue_scope": "single_process",
-            "queued_jobs_durable": False,
+            "queued_jobs_durable": True,
+            "running_jobs_resumable": False,
             "task_history_persisted": True,
         },
     }
     return JSONResponse(status_code=200 if database["ok"] else 503, content=payload)
+
+
+def _recover_persisted_jobs() -> dict:
+    recovery = docflow_repository.recover_interrupted_tasks()
+    recovered = 0
+    failed_to_requeue = 0
+    for task in recovery["queued_tasks"]:
+        request_id = f"restart-recovery-{task['id']}"
+        try:
+            job_coordinator.submit(
+                task["id"],
+                lambda task=task, request_id=request_id: _execute_docflow_task(task, request_id=request_id),
+            )
+            recovered += 1
+        except QueueCapacityError as error:
+            failed_to_requeue += 1
+            docflow_repository.fail_queued_task(
+                task["id"],
+                f"应用重启后恢复队列失败：{error}",
+            )
+    log_event(
+        event_logger,
+        "docflow_restart_recovery",
+        recovered_queued=recovered,
+        failed_running=recovery["failed_running"],
+        failed_to_requeue=failed_to_requeue,
+    )
+    return {
+        "recovered_queued": recovered,
+        "failed_running": recovery["failed_running"],
+        "failed_to_requeue": failed_to_requeue,
+    }
+
+
+_recover_persisted_jobs()
