@@ -6,7 +6,72 @@ const taskList = document.querySelector('#task-list');
 const sampleButton = document.querySelector('#sample-button');
 const refreshEvaluationButton = document.querySelector('#refresh-evaluation');
 const jobProgress = document.querySelector('#job-progress');
+const appShell = document.querySelector('.app-shell');
+const sidebarResizer = document.querySelector('#sidebar-resizer');
 let activeTaskId = null;
+
+const SIDEBAR_DEFAULT_WIDTH = 248;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_STORAGE_KEY = 'docflow.sidebarWidth';
+
+function clampSidebarWidth(width) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function applySidebarWidth(width, persist = false) {
+  const nextWidth = clampSidebarWidth(width);
+  appShell.style.setProperty('--sidebar-width', `${nextWidth}px`);
+  sidebarResizer.setAttribute('aria-valuenow', String(nextWidth));
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(nextWidth)); } catch (_) { /* Storage may be disabled. */ }
+  }
+  return nextWidth;
+}
+
+function setupSidebarResize() {
+  let storedWidth = SIDEBAR_DEFAULT_WIDTH;
+  try { storedWidth = Number.parseInt(localStorage.getItem(SIDEBAR_STORAGE_KEY), 10) || SIDEBAR_DEFAULT_WIDTH; } catch (_) { /* Use default. */ }
+  applySidebarWidth(storedWidth);
+
+  let dragStartX = 0;
+  let dragStartWidth = storedWidth;
+
+  const stopDragging = () => {
+    if (!sidebarResizer.classList.contains('dragging')) return;
+    sidebarResizer.classList.remove('dragging');
+    document.body.classList.remove('sidebar-resizing');
+    applySidebarWidth(Number.parseInt(sidebarResizer.getAttribute('aria-valuenow'), 10), true);
+  };
+
+  sidebarResizer.addEventListener('pointerdown', (event) => {
+    if (window.innerWidth <= 900) return;
+    event.preventDefault();
+    dragStartX = event.clientX;
+    dragStartWidth = Number.parseInt(sidebarResizer.getAttribute('aria-valuenow'), 10) || SIDEBAR_DEFAULT_WIDTH;
+    sidebarResizer.classList.add('dragging');
+    document.body.classList.add('sidebar-resizing');
+    sidebarResizer.setPointerCapture?.(event.pointerId);
+  });
+
+  sidebarResizer.addEventListener('pointermove', (event) => {
+    if (!sidebarResizer.classList.contains('dragging')) return;
+    applySidebarWidth(dragStartWidth + event.clientX - dragStartX);
+  });
+
+  sidebarResizer.addEventListener('pointerup', stopDragging);
+  sidebarResizer.addEventListener('pointercancel', stopDragging);
+  sidebarResizer.addEventListener('dblclick', () => applySidebarWidth(SIDEBAR_DEFAULT_WIDTH, true));
+  sidebarResizer.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+    event.preventDefault();
+    const current = Number.parseInt(sidebarResizer.getAttribute('aria-valuenow'), 10) || SIDEBAR_DEFAULT_WIDTH;
+    const next = event.key === 'Home' ? SIDEBAR_DEFAULT_WIDTH : current + (event.key === 'ArrowRight' ? 16 : -16);
+    applySidebarWidth(next, true);
+  });
+}
+
+setupSidebarResize();
 
 const statusLabels = {
   queued: '排队中', running: '运行中', awaiting_review: '待人工审核', approved: '审核通过', rejected: '已驳回', failed: '运行失败',

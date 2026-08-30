@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFlow 协作式文档 Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260830-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260830-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -31,6 +31,19 @@
           <p>MCP stdio · Human Review</p>
         </div>
       </aside>
+
+      <div
+        id="sidebar-resizer"
+        class="sidebar-resizer"
+        role="separator"
+        aria-label="调整侧边栏宽度"
+        aria-orientation="vertical"
+        aria-valuemin="220"
+        aria-valuemax="420"
+        aria-valuenow="248"
+        tabindex="0"
+        title="拖动调整侧边栏宽度，双击恢复默认宽度"
+      ></div>
 
       <main class="workspace" id="workspace">
         <header class="topbar">
@@ -189,6 +202,6 @@
       <section><div class="section-heading"><h3>引用校验</h3><span>Evidence verification</span></div><p class="verification-result"></p><div class="evidence-list"></div></section>
       <section class="review"><div class="section-heading"><h3>人工审核</h3><span>Human in the loop</span></div><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section>
     </template>
-    <script src="/static/app.js?v=20260829-5"></script>
+    <script src="/static/app.js?v=20260830-2"></script>
   </body>
 </html>
