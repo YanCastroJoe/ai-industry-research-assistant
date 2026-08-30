@@ -387,7 +387,7 @@ async function loadTasks() {
   taskList.replaceChildren(...tasks.map((task) => {
     const item = document.createElement('article');
     item.className = `task ${task.id === activeTaskId ? 'active' : ''}`;
-    item.innerHTML = `<h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span>${escapeHtml(task.goal)}</p>`;
+    item.innerHTML = `<h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span></p>`;
     item.addEventListener('click', async () => renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json()));
     return item;
   }));
