@@ -293,3 +293,97 @@ button:disabled { opacity: .6; cursor: wait; }
   .quality-gate { grid-template-columns: 24px minmax(0,1fr); }
   .quality-gate > small { grid-column: 2; }
 }
+
+/* Readable presentation scale: keep dense AgentOps information legible on
+   laptop screens and screen-shared interview demos. */
+body { font-size: 14px; line-height: 1.5; text-rendering: optimizeLegibility; }
+
+.brand strong { font-size: 16px; }
+.brand small { font-size: 12px; }
+.nav-item { font-size: 14px; }
+.sidebar-heading { font-size: 12px; }
+.live-dot { font-size: 10px; }
+.task h3 { font-size: 13px; }
+.task p { font-size: 11px; line-height: 1.5; }
+.task-list { grid-auto-rows: minmax(62px, auto); }
+.task { min-height: 62px; }
+.environment-card div { font-size: 12px; }
+.environment-card p { font-size: 11px; line-height: 1.5; }
+
+.breadcrumb { font-size: 12px; }
+.topbar h1 { font-size: 24px; }
+.top-chip { font-size: 12px; }
+.ghost-button { min-height: 38px; font-size: 13px; }
+.capability-icon { font-size: 12px; }
+.capability-strip strong { font-size: 13px; }
+.capability-strip small { font-size: 11px; line-height: 1.4; }
+
+.panel-header h2 { font-size: 18px; }
+.section-kicker { font-size: 10px; }
+.panel-badge { font-size: 11px; }
+.form-section h3 { font-size: 13px; }
+.form-heading-row span { font-size: 10px; }
+label { font-size: 12px; }
+input, select, textarea { min-height: 42px; font-size: 14px; line-height: 1.5; }
+.file-field input { min-height: 0; font-size: 12px; }
+.toggle-row strong { font-size: 12px; }
+.toggle-row small { font-size: 10px; line-height: 1.55; }
+.submit-row p { font-size: 11px; }
+button, .export { min-height: 40px; font-size: 13px; }
+.form-message { font-size: 12px; }
+.job-progress > div:first-child { font-size: 11px; }
+.job-progress-detail { font-size: 10px; line-height: 1.55; }
+
+.empty-state h3 { font-size: 17px; }
+.empty-state p { font-size: 13px; line-height: 1.7; }
+.empty-state li { font-size: 11px; }
+.empty-visual span { font-size: 12px; }
+
+.card-head h2 { font-size: 20px; }
+.card-goal { font-size: 13px; line-height: 1.65; }
+.status { font-size: 11px; }
+.task-mode { font-size: 12px; }
+.section-heading h3 { font-size: 14px; }
+.section-heading span { font-size: 10px; }
+.metric strong { font-size: 16px; }
+.metric small { font-size: 10px; }
+.plan li { font-size: 12px; line-height: 1.6; }
+.plan li::before { font-size: 10px; }
+
+.context-summary small { font-size: 9px; }
+.context-summary strong { font-size: 11px; }
+.context-layer div span { font-size: 9px; }
+.context-layer strong { font-size: 11px; }
+.context-layer p { font-size: 10px; line-height: 1.55; }
+.context-layer small { font-size: 9px; }
+.context-policies li { font-size: 9px; }
+
+.flow-node strong { font-size: 11px; }
+.flow-node small { font-size: 9px; line-height: 1.5; }
+.flow-index { font-size: 9px; }
+.trace-detail-head small { font-size: 9px; }
+.trace-detail-head h4 { font-size: 13px; }
+.trace-detail-head code { font-size: 9px; }
+.trace-state { font-size: 9px; }
+.trace-detail > p { font-size: 11px; line-height: 1.65; }
+.trace-io strong { font-size: 9px; }
+.trace-io pre { font-size: 10px; line-height: 1.6; }
+.trace-meta { font-size: 9px !important; }
+.artifact { font-size: 12px; line-height: 1.7; }
+.verification-result { font-size: 12px; }
+.evidence-item { font-size: 12px; line-height: 1.65; }
+.review-message, .export-message { font-size: 11px; }
+.risk-table { font-size: 11px; line-height: 1.55; }
+
+.evaluation-header h2 { font-size: 19px; }
+.evaluation-header > div > p:last-child { font-size: 12px; line-height: 1.65; }
+.evaluation-metrics strong { font-size: 17px; }
+.evaluation-metrics span { font-size: 10px; }
+.gate-icon { font-size: 10px; }
+.quality-gate strong { font-size: 11px; }
+.quality-gate p { font-size: 9px; line-height: 1.5; }
+.quality-gate > small { font-size: 9px; }
+.evaluation-table { font-size: 11px; }
+.evaluation-table th { font-size: 10px; }
+.evaluation-task-link { font-size: 11px; }
+.evaluation-notice { font-size: 10px; line-height: 1.6; }
