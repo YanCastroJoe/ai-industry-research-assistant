@@ -10,11 +10,19 @@
 
 **技术栈：** Python、FastAPI、SQLite、OpenAI-compatible API、MCP、Vanilla JavaScript
 
+### 一页简历精简版（推荐）
+
+- 面向项目材料分散、文档生成不可追踪的问题，设计 `Planner → Tool Registry → Agent Runtime` 工作流，并以 Instruction/Source/Memory/Evidence 分层上下文驱动检索、事实抽取、带 `[E#]` 引用的文档生成与人工审核。
+- 实现 SafePlanner 白名单校验与 RulePlanner 回退，以及超时重试、错误分类、SQLite `Task/Run/Step/Attempt` Trace/Checkpoint；支持异步排队、幂等提交与 queued 任务重启恢复。
+- 基于官方 MCP Python SDK 完成 stdio 工具发现与调用，并通过 AgentOps 汇总引用、工具成功率和运行诊断；DocFlow 相关 19 项自动化测试通过，固定回归集 20/20，工具选择 Precision/Recall 与引用通过率均为 100%（仅代表固定集）。
+
+### 详细版
+
 - 针对项目材料分散、文档生成过程不可追踪的问题，设计 Planner → Tool Registry → Agent Runtime 工作流，将检索、事实抽取、内容生成、引用校验和人工审核拆为 6–7 个可观测步骤，输出带 `[E#]` 证据引用的周报、风险清单与汇报大纲。
 - 针对模型规划可能越权或产生非法步骤的问题，实现 LLM Planner 与 RulePlanner 双路径，并以工具白名单、依赖顺序、重复调用和最大步数校验约束执行计划；模型不可用或计划不合法时自动回退。
 - 针对长链路工具瞬时故障导致整次任务重跑的问题，实现超时、有限重试、错误分类与 SQLite 检查点恢复，按 Run/Step/Attempt 记录执行轨迹，可从最近成功步骤继续执行。
 - 实现 Instruction/Source/Memory/Evidence 分层上下文与可视化 Trace，支持受众、信息焦点和证据预算配置；新增受控异步队列、SQLite 排队任务重启恢复、幂等提交、Request ID/JSON 日志、任务进度轮询及 AgentOps 质量门禁，并基于官方 MCP SDK 完成 stdio 工具发现与调用。
-- 构建 20 条固定任务和合成故障场景，当前本地规则模式下 20/20 通过，工具选择 Precision/Recall 与引用通过率均为 100%。
+- 建立项目测试套件 26 项（其中 DocFlow 相关 19 项），并构建 20 条固定任务与合成故障场景；当前本地规则模式下固定集 20/20 通过，工具选择 Precision/Recall 与引用通过率均为 100%。
 
 ## 面试时必须主动说明
 

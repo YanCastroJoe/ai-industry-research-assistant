@@ -8,7 +8,7 @@
 
 [直接打开 DocFlow 公网演示](http://124.221.243.125:8010)
 
-推荐使用页面内置样例，创建任务后查看 Context Manifest、执行计划、交互式工具链路、引用校验与审核导出流程。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
+推荐使用页面内置样例，创建任务后查看 Context Manifest、执行计划、交互式工具链路、引用校验、AgentOps 质量门禁与审核导出流程。侧边栏仅保留任务名称和状态，并支持按屏幕宽度拉伸。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
 
 ## 项目解决的问题
 
@@ -98,7 +98,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-2026-08-29 本地规则模式结果：25 项测试通过；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
+2026-08-30 本地规则模式结果：项目测试套件 26 项通过（其中 DocFlow 相关 19 项）；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
 
 ## API 摘要
 
