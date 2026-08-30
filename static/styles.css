@@ -44,6 +44,14 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .nav-item span { width: 20px; color: #8f98aa; text-align: center; }
 .nav-item:hover, .nav-item.active { color: #fff; background: rgba(255,255,255,.09); }
 .nav-item.active span { color: #b9b6ff; }
+.sidebar-examples { padding: 12px 0; border-top: 1px solid rgba(255,255,255,.09); }
+.sidebar-examples .sidebar-heading { padding-bottom: 7px; }
+.template-label { color: #b9b6ff; font-size: 10px; letter-spacing: 0; text-transform: none; }
+.example-task { width: 100%; min-height: 0; display: block; padding: 8px 11px; border: 1px solid transparent; color: #fff; background: transparent; text-align: left; }
+.example-task:hover { border-color: rgba(185,182,255,.32); background: rgba(255,255,255,.08); }
+.example-task strong, .example-task small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.example-task strong { font-size: 13px; }
+.example-task small { margin-top: 3px; color: var(--sidebar-muted); font-size: 11px; font-weight: 500; }
 .sidebar-section { min-height: 0; display: flex; flex: 1; flex-direction: column; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.09); }
 .sidebar-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 8px 10px; color: #d2d6df; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .live-dot { padding: 3px 6px; border-radius: 999px; color: #88e4bd; background: rgba(22,130,93,.18); font-size: 9px; }
@@ -302,15 +310,15 @@ button:disabled { opacity: .6; cursor: wait; }
 
 /* Readable presentation scale: keep dense AgentOps information legible on
    laptop screens and screen-shared interview demos. */
-body { font-size: 14px; line-height: 1.5; text-rendering: optimizeLegibility; }
+body { font-size: 15px; line-height: 1.55; text-rendering: optimizeLegibility; }
 
 .brand strong { font-size: 16px; }
 .brand small { font-size: 12px; }
 .nav-item { font-size: 14px; }
 .sidebar-heading { font-size: 12px; }
 .live-dot { font-size: 10px; }
-.task h3 { font-size: 13px; }
-.task p { font-size: 11px; line-height: 1.5; }
+.task h3 { font-size: 14px; }
+.task p { font-size: 12px; line-height: 1.5; }
 .task-list { grid-auto-rows: minmax(62px, auto); }
 .task { min-height: 62px; }
 .environment-card div { font-size: 12px; }
@@ -329,7 +337,7 @@ body { font-size: 14px; line-height: 1.5; text-rendering: optimizeLegibility; }
 .panel-badge { font-size: 11px; }
 .form-section h3 { font-size: 13px; }
 .form-heading-row span { font-size: 10px; }
-label { font-size: 12px; }
+label { font-size: 13px; }
 input, select, textarea { min-height: 42px; font-size: 14px; line-height: 1.5; }
 .file-field input { min-height: 0; font-size: 12px; }
 .toggle-row strong { font-size: 12px; }
@@ -408,6 +416,7 @@ button, .export { min-height: 40px; font-size: 13px; }
 .app-shell.sidebar-collapsed .brand { justify-content: center; padding-inline: 0; }
 .app-shell.sidebar-collapsed .brand-copy,
 .app-shell.sidebar-collapsed .nav-item b,
+.app-shell.sidebar-collapsed .sidebar-examples,
 .app-shell.sidebar-collapsed .sidebar-section,
 .app-shell.sidebar-collapsed .environment-card { display: none; }
 .app-shell.sidebar-collapsed .sidebar-toggle { position: absolute; top: 67px; width: 24px; min-height: 24px; }
@@ -458,6 +467,15 @@ button, .export { min-height: 40px; font-size: 13px; }
 
 @media (min-width: 1121px) {
   .workspace-grid { grid-template-columns: minmax(370px,440px) minmax(560px,1fr); }
+  .workspace-grid.is-idle { grid-template-columns: minmax(560px,820px); justify-content: center; }
+  .workspace-grid.is-idle .result-panel { min-height: 0; padding: 18px 20px; }
+  .workspace-grid.is-idle .result-panel .panel-header { padding-bottom: 12px; }
+  .workspace-grid.is-idle .result-tabs { display: none; }
+  .workspace-grid.is-idle .empty-state { min-height: 190px; padding: 22px 28px; }
+  .workspace-grid.is-idle .empty-visual { padding: 11px; }
+  .workspace-grid.is-idle .empty-visual span { width: 40px; height: 40px; }
+  .workspace-grid.is-idle .empty-state h3 { margin-top: 14px; }
+  .workspace-grid.is-idle .empty-state ul { margin-top: 12px; }
 }
 
 @media (max-width: 900px) {

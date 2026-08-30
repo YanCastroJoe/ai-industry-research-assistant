@@ -12,7 +12,66 @@ const sidebarToggle = document.querySelector('#sidebar-toggle');
 const historyList = document.querySelector('#history-list');
 const navItems = [...document.querySelectorAll('[data-section-target]')];
 const resultTabs = [...document.querySelectorAll('[data-result-target]')];
+const workspaceGrid = document.querySelector('#workspace-grid');
+const exampleTasks = [...document.querySelectorAll('[data-example]')];
 let activeTaskId = null;
+
+const demoExamples = {
+  weekly: {
+    title: '智能客服项目第 3 周周报',
+    goal: '基于材料生成本周项目周报、风险清单和三页汇报大纲；每条结论标注来源。',
+    text: `项目：智能客服知识库升级
+本周进展：完成售后 FAQ 清洗与检索链路联调，24 条核心问法通过验收。
+风险：退款政策文档仍有两个版本，负责人李明需在周五前确认最终口径。
+行动：王芳负责补充退货运费边界案例，下周二完成回归测试。
+会议结论：所有面向客户的回答必须附带当前知识库来源。`,
+    audience: '管理层',
+    focus: 'risk',
+  },
+  support: {
+    title: '售后知识库上线验收',
+    goal: '整理上线验收结论、未覆盖的知识边界和待修复事项，并为每项判断标注材料来源。',
+    text: `验收范围：退款、退货运费、质量问题与物流时效四类售后问答。
+测试结果：30 条固定问题中 28 条回答符合预期，质量问题与偏远地区运费各有 1 条口径不完整。
+风险：旧版退款政策仍在知识库中，可能造成回答冲突。
+行动：陈晨今天下线旧文档；刘洋周三补齐两条边界案例并执行回归测试。`,
+    audience: '技术团队',
+    focus: 'actions',
+  },
+  review: {
+    title: 'Agent 功能需求评审纪要',
+    goal: '提取评审结论、争议点、负责人和截止时间，形成可执行的需求纪要。',
+    text: `评审主题：为文档 Agent 增加异步任务与失败恢复能力。
+结论：一期采用任务队列和 SQLite Checkpoint，不引入外部消息队列。
+争议：是否允许用户跳过人工审核直接导出，暂不开放。
+行动：张伟本周完成接口设计；赵敏下周一补齐异常场景测试；产品负责人周五确认导出权限。`,
+    audience: '项目团队',
+    focus: 'actions',
+  },
+};
+
+function setWorkspaceMode(mode) {
+  workspaceGrid.classList.toggle('is-idle', mode === 'idle');
+  workspaceGrid.classList.toggle('is-active', mode === 'active');
+}
+
+function loadDemoExample(key = 'weekly') {
+  const example = demoExamples[key] || demoExamples.weekly;
+  document.querySelector('#title').value = example.title;
+  document.querySelector('#session-id').value = `${key}-demo`;
+  document.querySelector('#run-mode').value = 'async';
+  document.querySelector('#memory').value = '面向目标受众，优先展示风险、负责人和截止时间';
+  document.querySelector('#audience').value = example.audience;
+  document.querySelector('#context-focus').value = example.focus;
+  document.querySelector('#evidence-limit').value = '9';
+  document.querySelector('#citation-policy').value = 'strict';
+  document.querySelector('#memory-enabled').checked = true;
+  document.querySelector('#goal').value = example.goal;
+  document.querySelector('#text').value = example.text;
+  activateMainView('workspace-view');
+  setWorkspaceMode('idle');
+  document.querySelector('#goal').focus();
+}
 
 const SIDEBAR_DEFAULT_WIDTH = 248;
 const SIDEBAR_MIN_WIDTH = 220;
@@ -323,6 +382,7 @@ function renderExecutionFlow(task, node) {
 
 function renderTask(task) {
   activeTaskId = task.id;
+  setWorkspaceMode('active');
   const node = document.querySelector('#card-template').content.cloneNode(true);
   node.querySelector('.card-title').textContent = task.title;
   node.querySelector('.card-goal').textContent = `目标：${task.goal}`;
@@ -430,7 +490,10 @@ async function retryTask(taskId, button, feedback) {
 
 async function loadTasks() {
   const tasks = await (await request('/api/docflow/tasks')).json();
-  taskList.replaceChildren(...tasks.map((task) => {
+  const sidebarTasks = tasks
+    .filter((task) => !/^(automated demo check|\?+)$/i.test(task.title.trim()))
+    .slice(0, 6);
+  taskList.replaceChildren(...sidebarTasks.map((task) => {
     const item = document.createElement('article');
     item.className = `task ${task.id === activeTaskId ? 'active' : ''}`;
     item.innerHTML = `<h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span></p>`;
@@ -501,6 +564,7 @@ form.addEventListener('submit', async (event) => {
   const selectedFile = document.querySelector('#file').files[0];
   const idempotencyKey = window.crypto?.randomUUID?.() || `docflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   submit.disabled = true;
+  setWorkspaceMode('active');
   submit.textContent = runMode === 'async' ? '正在提交后台任务…' : 'Planner 正在生成计划…';
   jobProgress.hidden = true;
   try {
@@ -550,24 +614,8 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
-sampleButton.addEventListener('click', () => {
-  document.querySelector('#title').value = '智能客服项目第 3 周周报';
-  document.querySelector('#session-id').value = 'customer-service-demo';
-  document.querySelector('#run-mode').value = 'async';
-  document.querySelector('#memory').value = '面向管理层，优先展示风险、负责人和截止时间';
-  document.querySelector('#audience').value = '管理层';
-  document.querySelector('#context-focus').value = 'risk';
-  document.querySelector('#evidence-limit').value = '9';
-  document.querySelector('#citation-policy').value = 'strict';
-  document.querySelector('#memory-enabled').checked = true;
-  document.querySelector('#goal').value = '基于材料生成本周项目周报、风险清单和三页汇报大纲；每条结论标注来源。';
-  document.querySelector('#text').value = `项目：智能客服知识库升级
-本周进展：完成售后 FAQ 清洗与检索链路联调，24 条核心问法通过验收。
-风险：退款政策文档仍有两个版本，负责人李明需在周五前确认最终口径。
-行动：王芳负责补充退货运费边界案例，下周二完成回归测试。
-会议结论：所有面向客户的回答必须附带当前知识库来源。`;
-  document.querySelector('#goal').focus();
-});
+sampleButton.addEventListener('click', () => loadDemoExample('weekly'));
+exampleTasks.forEach((button) => button.addEventListener('click', () => loadDemoExample(button.dataset.example)));
 
 refreshEvaluationButton.addEventListener('click', async () => {
   const originalText = refreshEvaluationButton.textContent;

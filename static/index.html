@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFlow 协作式文档 Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260830-3" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260831-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -20,6 +20,13 @@
           <a class="nav-item" href="#history-view" data-section-target="history-view"><span>↻</span><b>运行记录</b></a>
           <a class="nav-item" href="#evaluation-dashboard" data-section-target="evaluation-dashboard"><span>◇</span><b>质量评测</b></a>
         </nav>
+
+        <div class="sidebar-examples" aria-label="演示任务模板">
+          <div class="sidebar-heading"><span>演示模板</span><span class="template-label">可载入</span></div>
+          <button class="example-task" type="button" data-example="weekly"><strong>项目周报与风险清单</strong><small>管理层汇报 · 引用可追溯</small></button>
+          <button class="example-task" type="button" data-example="support"><strong>客服知识库验收</strong><small>问答边界 · 规则校验</small></button>
+          <button class="example-task" type="button" data-example="review"><strong>需求评审纪要</strong><small>决策事项 · 负责人提取</small></button>
+        </div>
 
         <div class="sidebar-section" id="task-history">
           <div class="sidebar-heading"><span>最近运行</span><span class="live-dot">LIVE</span></div>
@@ -72,7 +79,7 @@
             </div>
           </details>
 
-          <section class="workspace-grid">
+          <section class="workspace-grid is-idle" id="workspace-grid">
           <form id="docflow-form" class="panel composer-panel">
             <div class="panel-header">
               <div><p class="section-kicker">NEW RUN</p><h2>创建协作任务</h2></div>
@@ -134,8 +141,8 @@
               <div class="empty-visual" aria-hidden="true">
                 <span>目标</span><i></i><span>计划</span><i></i><span>工具</span><i></i><span>审核</span>
               </div>
-              <h3>等待新的 Agent Run</h3>
-              <p>提交材料后，在这里检查计划、工具调用、步骤耗时、引用证据与人工审核状态。</p>
+              <h3>运行后在这里检查完整结果</h3>
+              <p>先在上方创建任务；提交后将展开结果、执行步骤、引用证据与人工审核状态。</p>
               <ul>
                 <li>逐步Trace与错误定位</li>
                 <li>失败重试和Checkpoint恢复</li>
@@ -187,6 +194,6 @@
       <div class="result-view" data-result-view="citations" hidden><section><div class="section-heading"><h3>引用校验</h3><span>Evidence verification</span></div><p class="verification-result"></p><div class="evidence-list"></div></section></div>
       <div class="result-view" data-result-view="review" hidden><section class="review"><div class="section-heading"><h3>人工审核</h3><span>Human in the loop</span></div><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button><button class="export" type="button" hidden>导出 Markdown</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section></div>
     </template>
-    <script src="/static/app.js?v=20260830-3"></script>
+    <script src="/static/app.js?v=20260831-1"></script>
   </body>
 </html>
