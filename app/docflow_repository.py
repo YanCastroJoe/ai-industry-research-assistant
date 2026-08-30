@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -17,8 +18,10 @@ class DocflowRepository:
 
     @contextmanager
     def _connect(self):
-        connection = sqlite3.connect(self.database_path)
+        connection = sqlite3.connect(self.database_path, timeout=5.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA foreign_keys = ON")
         try:
             yield connection
             connection.commit()
@@ -27,6 +30,8 @@ class DocflowRepository:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS docflow_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +39,9 @@ class DocflowRepository:
                     goal TEXT NOT NULL,
                     source_text TEXT NOT NULL,
                     session_id TEXT NOT NULL DEFAULT 'default',
+                    context_config_json TEXT NOT NULL DEFAULT '{}',
+                    idempotency_key TEXT,
+                    request_fingerprint TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     reviewer_note TEXT NOT NULL DEFAULT '',
                     plan_json TEXT NOT NULL DEFAULT '[]',
@@ -45,6 +53,15 @@ class DocflowRepository:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(docflow_tasks)").fetchall()}
             if "reviewer_note" not in columns:
                 connection.execute("ALTER TABLE docflow_tasks ADD COLUMN reviewer_note TEXT NOT NULL DEFAULT ''")
+            if "context_config_json" not in columns:
+                connection.execute("ALTER TABLE docflow_tasks ADD COLUMN context_config_json TEXT NOT NULL DEFAULT '{}'")
+            if "idempotency_key" not in columns:
+                connection.execute("ALTER TABLE docflow_tasks ADD COLUMN idempotency_key TEXT")
+            if "request_fingerprint" not in columns:
+                connection.execute("ALTER TABLE docflow_tasks ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_docflow_tasks_idempotency_key ON docflow_tasks(idempotency_key) WHERE idempotency_key IS NOT NULL"
+            )
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS docflow_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,15 +134,92 @@ class DocflowRepository:
                 )"""
             )
 
-    def create_task(self, title: str, goal: str, source_text: str, session_id: str = "default") -> dict:
+    def create_task(
+        self,
+        title: str,
+        goal: str,
+        source_text: str,
+        session_id: str = "default",
+        context_config: dict | None = None,
+    ) -> dict:
         with self._connect() as connection:
             cursor = connection.execute(
-                """INSERT INTO docflow_tasks (title, goal, source_text, session_id, status)
-                   VALUES (?, ?, ?, ?, 'queued')""",
-                (title, goal, source_text, session_id),
+                """INSERT INTO docflow_tasks (title, goal, source_text, session_id, context_config_json, status)
+                   VALUES (?, ?, ?, ?, ?, 'queued')""",
+                (title, goal, source_text, session_id, json.dumps(context_config or {}, ensure_ascii=False)),
             )
             task_id = cursor.lastrowid
         return self.get_task(task_id)
+
+    def create_or_get_task(
+        self,
+        title: str,
+        goal: str,
+        source_text: str,
+        session_id: str,
+        context_config: dict,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> tuple[dict, bool]:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id, request_fingerprint FROM docflow_tasks WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    raise ValueError("相同 Idempotency-Key 不能用于不同任务内容")
+                task_id = existing["id"]
+                created = False
+            else:
+                try:
+                    cursor = connection.execute(
+                        """INSERT INTO docflow_tasks
+                           (title, goal, source_text, session_id, context_config_json, idempotency_key, request_fingerprint, status)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')""",
+                        (
+                            title,
+                            goal,
+                            source_text,
+                            session_id,
+                            json.dumps(context_config, ensure_ascii=False),
+                            idempotency_key,
+                            request_fingerprint,
+                        ),
+                    )
+                    task_id = int(cursor.lastrowid)
+                    created = True
+                except sqlite3.IntegrityError:
+                    existing = connection.execute(
+                        "SELECT id, request_fingerprint FROM docflow_tasks WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+                    if existing is None or existing["request_fingerprint"] != request_fingerprint:
+                        raise ValueError("相同 Idempotency-Key 不能用于不同任务内容")
+                    task_id = existing["id"]
+                    created = False
+        return self.get_task(task_id), created
+
+    def recover_interrupted_tasks(self) -> int:
+        """Close stale in-process jobs after a single-instance application restart."""
+        message = "应用进程重启导致后台任务中断，请重新提交任务。"
+        with self._connect() as connection:
+            interrupted = connection.execute(
+                "SELECT id FROM docflow_tasks WHERE status IN ('queued', 'running')"
+            ).fetchall()
+            if not interrupted:
+                return 0
+            task_ids = [row["id"] for row in interrupted]
+            placeholders = ",".join("?" for _ in task_ids)
+            connection.execute(
+                f"UPDATE docflow_tasks SET status = 'failed', reviewer_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                (message, *task_ids),
+            )
+            connection.execute(
+                f"UPDATE docflow_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE status = 'running' AND task_id IN ({placeholders})",
+                (message, *task_ids),
+            )
+        return len(task_ids)
 
     def create_run(self, task_id: int, parent_run_id: int | None = None) -> int:
         with self._connect() as connection:
@@ -135,6 +229,74 @@ class DocflowRepository:
             )
             run_id = int(cursor.lastrowid)
         return run_id
+
+    def mark_task_running(self, task_id: int) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE docflow_tasks SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+                (task_id,),
+            )
+            if cursor.rowcount == 0:
+                row = connection.execute("SELECT status FROM docflow_tasks WHERE id = ?", (task_id,)).fetchone()
+                if row is None:
+                    raise KeyError(task_id)
+
+    def fail_queued_task(self, task_id: int, message: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE docflow_tasks SET status = 'failed', reviewer_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+                (message, task_id),
+            )
+
+    def fail_task(self, task_id: int, message: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE docflow_tasks SET status = 'failed', reviewer_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (message, task_id),
+            )
+
+    def job_status(self, task_id: int) -> dict:
+        task = self.get_task(task_id)
+        runs = task.get("runs", [])
+        latest_run = runs[0] if runs else None
+        steps = latest_run.get("steps", []) if latest_run else []
+        completed_sequences = {step["sequence"] for step in steps if step["status"] == "completed"}
+        planned_steps = len(task.get("plan", []))
+        current_tool = steps[-1]["tool_name"] if steps else ""
+        retry_count = max(0, len(steps) - len({step["sequence"] for step in steps}))
+        terminal = task["status"] in {"awaiting_review", "approved", "rejected", "failed"}
+        if terminal:
+            progress = 100
+        elif task["status"] == "queued":
+            progress = 0
+        elif planned_steps:
+            progress = min(95, max(5, round(len(completed_sequences) / planned_steps * 100)))
+        else:
+            progress = 5
+        return {
+            "task_id": task_id,
+            "status": task["status"],
+            "terminal": terminal,
+            "progress_percent": progress,
+            "planned_steps": planned_steps,
+            "completed_steps": len(completed_sequences),
+            "current_tool": current_tool,
+            "retry_count": retry_count,
+            "error": latest_run.get("error", "") if latest_run else task.get("reviewer_note", ""),
+            "updated_at": task["updated_at"],
+        }
+
+    def operational_status(self) -> dict:
+        with self._connect() as connection:
+            quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+            journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+            busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+        return {
+            "ok": quick_check == "ok",
+            "quick_check": quick_check,
+            "journal_mode": journal_mode,
+            "busy_timeout_ms": busy_timeout,
+        }
 
     def record_step(self, run_id: int, step: dict) -> None:
         with self._connect() as connection:
@@ -278,6 +440,88 @@ class DocflowRepository:
             rows = connection.execute("SELECT * FROM docflow_tasks ORDER BY id DESC").fetchall()
         return [self._task_to_dict(row, include_source=False) for row in rows]
 
+    def evaluation_summary(self, recent_limit: int = 8) -> dict:
+        """Aggregate persisted task outcomes into an auditable local AgentOps snapshot."""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM docflow_tasks ORDER BY updated_at DESC, id DESC").fetchall()
+        tasks = [self._task_to_dict(row, include_source=False) for row in rows]
+        evaluated = [task for task in tasks if task.get("result", {}).get("metrics")]
+        reviewed = [task for task in tasks if task["status"] in {"approved", "rejected"}]
+        latencies = sorted(int(task["result"]["metrics"].get("elapsed_ms", 0)) for task in evaluated)
+
+        def rate(numerator: int, denominator: int) -> float | None:
+            return round(numerator / denominator, 4) if denominator else None
+
+        def percentile(values: list[int], proportion: float) -> int | None:
+            if not values:
+                return None
+            index = max(0, math.ceil(len(values) * proportion) - 1)
+            return values[index]
+
+        citation_passed = sum(bool(task["result"].get("verification", {}).get("passed")) for task in evaluated)
+        tool_success_values = [float(task["result"]["metrics"].get("tool_success_rate", 0)) for task in evaluated]
+        retry_tasks = sum(int(task["result"]["metrics"].get("retry_count", 0)) > 0 for task in evaluated)
+        failed_tasks = sum(task["status"] == "failed" for task in tasks)
+        approved_tasks = sum(task["status"] == "approved" for task in reviewed)
+        metrics = {
+            "task_count": len(tasks),
+            "evaluated_count": len(evaluated),
+            "reviewed_count": len(reviewed),
+            "citation_pass_rate": rate(citation_passed, len(evaluated)),
+            "tool_success_rate": round(sum(tool_success_values) / len(tool_success_values), 4) if tool_success_values else None,
+            "approval_rate": rate(approved_tasks, len(reviewed)),
+            "retry_task_rate": rate(retry_tasks, len(evaluated)),
+            "failed_task_rate": rate(failed_tasks, len(tasks)),
+            "latency_p50_ms": percentile(latencies, 0.50),
+            "latency_p95_ms": percentile(latencies, 0.95),
+        }
+        gate_specs = [
+            ("引用通过率", "citation_pass_rate", ">=", 0.95, "生成结果中的 Evidence ID 可追溯"),
+            ("工具成功率", "tool_success_rate", ">=", 0.98, "计划内工具步骤成功完成"),
+            ("失败任务率", "failed_task_rate", "<=", 0.05, "任务未因运行异常终止"),
+            ("P95 运行耗时", "latency_p95_ms", "<=", 3000, "本地规则演示链路阈值"),
+        ]
+        gates = []
+        for name, key, operator, target, description in gate_specs:
+            value = metrics[key]
+            passed = None if value is None else (value >= target if operator == ">=" else value <= target)
+            gates.append({"name": name, "metric": key, "value": value, "operator": operator, "target": target, "passed": passed, "description": description})
+
+        recent = []
+        for task in tasks[: max(1, min(recent_limit, 20))]:
+            result = task.get("result", {})
+            run_metrics = result.get("metrics", {})
+            issues = []
+            if task["status"] == "failed":
+                issues.append("运行失败")
+            if result and not result.get("verification", {}).get("passed", False):
+                issues.append("引用校验未通过")
+            if int(run_metrics.get("retry_count", 0)) > 0:
+                issues.append(f"发生 {run_metrics['retry_count']} 次重试")
+            if task["status"] == "rejected":
+                issues.append("人工审核驳回")
+            recent.append(
+                {
+                    "task_id": task["id"],
+                    "title": task["title"],
+                    "status": task["status"],
+                    "updated_at": task["updated_at"],
+                    "elapsed_ms": run_metrics.get("elapsed_ms"),
+                    "executed_steps": run_metrics.get("executed_steps"),
+                    "retry_count": run_metrics.get("retry_count"),
+                    "citation_passed": result.get("verification", {}).get("passed") if result else None,
+                    "planner_mode": result.get("planner", {}).get("mode", ""),
+                    "issues": issues,
+                }
+            )
+        return {
+            "scope": "local_task_history",
+            "metrics": metrics,
+            "quality_gates": gates,
+            "recent_tasks": recent,
+            "notice": "指标来自当前 SQLite 任务历史，用于本地回归与演示，不代表生产环境准确率或 SLA。",
+        }
+
     def get_task(self, task_id: int) -> dict:
         with self._connect() as connection:
             row = connection.execute("SELECT * FROM docflow_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -304,6 +548,7 @@ class DocflowRepository:
         task = dict(row)
         task["plan"] = json.loads(task.pop("plan_json"))
         task["result"] = json.loads(task.pop("result_json"))
+        task["context_config"] = json.loads(task.pop("context_config_json", "{}") or "{}")
         if not include_source:
             task.pop("source_text")
         return task

@@ -14,6 +14,33 @@ from .execution import ExecutionPolicy, ToolExecutionFailed, invoke_with_policy
 from .planning import SafePlanner, build_rule_plan
 
 
+DEFAULT_CONTEXT_CONFIG = {
+    "audience": "项目团队",
+    "focus": "balanced",
+    "evidence_limit": 12,
+    "memory_enabled": True,
+    "citation_policy": "strict",
+}
+
+FOCUS_LABELS = {
+    "balanced": "均衡呈现",
+    "risk": "风险优先",
+    "progress": "进展优先",
+    "actions": "行动项优先",
+}
+
+
+def normalize_context_config(value: dict[str, Any] | None) -> dict[str, Any]:
+    config = {**DEFAULT_CONTEXT_CONFIG, **(value or {})}
+    focus = str(config.get("focus", "balanced"))
+    config["focus"] = focus if focus in FOCUS_LABELS else "balanced"
+    config["audience"] = str(config.get("audience", "项目团队")).strip()[:100] or "项目团队"
+    config["evidence_limit"] = max(4, min(int(config.get("evidence_limit", 12)), 12))
+    config["memory_enabled"] = bool(config.get("memory_enabled", True))
+    config["citation_policy"] = "strict" if config.get("citation_policy") == "strict" else "standard"
+    return config
+
+
 @dataclass(frozen=True)
 class ToolDefinition:
     name: str
@@ -50,6 +77,11 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return list(self._tools)
+
+    def input_schema(self, name: str) -> dict[str, Any]:
+        if name not in self._tools:
+            raise KeyError(name)
+        return self._tools[name].input_schema
 
     def describe(self) -> list[dict[str, Any]]:
         return [
@@ -96,7 +128,12 @@ def _candidate_categories(text: str) -> set[str]:
     return {name for name, words in rules.items() if any(word.lower() in text.lower() for word in words)}
 
 
-def retrieve_documents(query: str, source_text: str) -> list[dict[str, str]]:
+def retrieve_documents(
+    query: str,
+    source_text: str,
+    evidence_limit: int = 12,
+    focus: str = "balanced",
+) -> list[dict[str, str]]:
     """Retrieve relevant evidence while reserving space for risks, actions and milestones."""
     candidates = _sentences(source_text) or [source_text[:500]]
     terms = _query_keywords(query)
@@ -117,18 +154,23 @@ def retrieve_documents(query: str, source_text: str) -> list[dict[str, str]]:
                 selected.append(item)
                 selected_indexes.add(item["index"])
 
-    # A report must retain independent evidence for status, risks and next actions.
-    reserve("risk", 4)
-    reserve("action", 3)
-    reserve("milestone", 2)
-    reserve("metric", 2)
+    evidence_limit = max(4, min(int(evidence_limit), 12))
+    quotas = {
+        "balanced": {"risk": 3, "action": 3, "milestone": 2, "metric": 2},
+        "risk": {"risk": 5, "action": 2, "milestone": 1, "metric": 1},
+        "progress": {"risk": 2, "action": 2, "milestone": 3, "metric": 3},
+        "actions": {"risk": 2, "action": 5, "milestone": 2, "metric": 1},
+    }.get(focus, {"risk": 3, "action": 3, "milestone": 2, "metric": 2})
+    # Reserve independent evidence by delivery focus, then fill remaining budget by relevance.
+    for category, quota in quotas.items():
+        reserve(category, min(quota, evidence_limit))
     for item in ranked:
-        if len(selected) >= 12:
+        if len(selected) >= evidence_limit:
             break
         if item["index"] not in selected_indexes:
             selected.append(item)
             selected_indexes.add(item["index"])
-    selected = sorted(selected[:12], key=lambda item: (-item["score"], item["index"]))
+    selected = sorted(selected[:evidence_limit], key=lambda item: (-item["score"], item["index"]))
     return [
         {"id": f"E{evidence_index}", "excerpt": item["text"][:360], "source_location": f"材料片段 {item['index'] + 1}"}
         for evidence_index, item in enumerate(selected, start=1)
@@ -257,9 +299,15 @@ def _normalize_insights(raw: dict[str, Any], facts: list[dict[str, str]]) -> dic
     return insights
 
 
-def derive_task_insights(goal: str, facts: list[dict[str, str]], memory_context: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def derive_task_insights(
+    goal: str,
+    facts: list[dict[str, str]],
+    memory_context: list[dict[str, str]] | None = None,
+    context_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """One guarded LLM call; memory guides preferences but never acts as factual evidence."""
     memory_context = memory_context or []
+    context_config = normalize_context_config(context_config)
     api_key = os.getenv("MODEL_API_KEY", "")
     if not api_key:
         fallback = _fallback_insights(goal, facts)
@@ -284,7 +332,16 @@ session_preferences 只用于输出结构和表达偏好，不能作为事实或
             {
                 "role": "user",
                 "content": json.dumps(
-                    {"goal": goal, "evidence": evidence_payload, "session_preferences": memory_context},
+                    {
+                        "goal": goal,
+                        "evidence": evidence_payload,
+                        "session_preferences": memory_context,
+                        "delivery_context": {
+                            "audience": context_config["audience"],
+                            "focus": FOCUS_LABELS[context_config["focus"]],
+                            "citation_policy": context_config["citation_policy"],
+                        },
+                    },
                     ensure_ascii=False,
                 ),
             },
@@ -387,7 +444,16 @@ class AgentRuntime:
                 "retrieve_documents",
                 "检索工作区原文证据",
                 retrieve_documents,
-                {"type": "object", "properties": {"query": {"type": "string"}, "source_text": {"type": "string"}}, "required": ["query", "source_text"]},
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "source_text": {"type": "string"},
+                        "evidence_limit": {"type": "integer", "minimum": 4, "maximum": 12},
+                        "focus": {"type": "string", "enum": list(FOCUS_LABELS)},
+                    },
+                    "required": ["query", "source_text"],
+                },
             )
             self.registry.register("extract_facts", "抽取可引用事实", extract_facts, object_schema)
             self.registry.register("derive_task_insights", "受证据约束地理解交付目标", derive_task_insights, object_schema)
@@ -411,8 +477,10 @@ class AgentRuntime:
         resume_state: dict[str, Any] | None = None,
         start_sequence: int = 1,
         memory_context: list[dict[str, str]] | None = None,
+        context_config: dict[str, Any] | None = None,
     ) -> dict:
         started_run = time.perf_counter()
+        context_config = normalize_context_config(context_config)
         if plan is None:
             planner_decision = self.planner.create_plan(goal, self.registry.describe())
             plan = planner_decision.plan
@@ -427,6 +495,7 @@ class AgentRuntime:
             "goal": goal,
             "source_text": source_text,
             "memory_context": memory_context or [],
+            "context_config": context_config,
             "evidence": [],
             "facts": [],
             "insights": {},
@@ -437,6 +506,7 @@ class AgentRuntime:
             state["goal"] = goal
             state["source_text"] = source_text
             state["memory_context"] = memory_context or state.get("memory_context", [])
+            state["context_config"] = context_config
         trace: list[dict] = []
         for sequence, step in enumerate(plan, start=1):
             if sequence < start_sequence:
@@ -469,6 +539,7 @@ class AgentRuntime:
             "plan": plan,
             "planner": {"mode": planner_mode, "fallback_reason": planner_fallback_reason},
             "memory": {"items_used": len(state.get("memory_context", []))},
+            "context": self._context_manifest(state),
             "evidence": state["evidence"],
             "facts": state["facts"],
             "insights": state["insights"],
@@ -511,17 +582,31 @@ class AgentRuntime:
         return {
             key: value
             for key, value in state.items()
-            if key in {"memory_context", "evidence", "facts", "insights", "artifacts", "verification"}
+            if key in {"memory_context", "context_config", "evidence", "facts", "insights", "artifacts", "verification"}
         }
 
-    @staticmethod
-    def _tool_input(tool_name: str, state: dict[str, Any]) -> dict[str, Any]:
+    def _tool_input(self, tool_name: str, state: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "retrieve_documents":
-            return {"query": state["goal"], "source_text": state["source_text"]}
+            config = state.get("context_config", DEFAULT_CONTEXT_CONFIG)
+            payload = {
+                "query": state["goal"],
+                "source_text": state["source_text"],
+                "evidence_limit": config["evidence_limit"],
+                "focus": config["focus"],
+            }
+            allowed = set(self.registry.input_schema(tool_name).get("properties", {}))
+            if not allowed:
+                return {"query": payload["query"], "source_text": payload["source_text"]}
+            return {key: value for key, value in payload.items() if key in allowed}
         if tool_name == "extract_facts":
             return {"evidence": state["evidence"]}
         if tool_name == "derive_task_insights":
-            return {"goal": state["goal"], "facts": state["facts"], "memory_context": state.get("memory_context", [])}
+            return {
+                "goal": state["goal"],
+                "facts": state["facts"],
+                "memory_context": state.get("memory_context", []),
+                "context_config": state.get("context_config", DEFAULT_CONTEXT_CONFIG),
+            }
         if tool_name == "compose_document":
             return {"goal": state["goal"], "insights": state["insights"]}
         if tool_name in {"generate_risk_register", "generate_slide_outline"}:
@@ -557,3 +642,55 @@ class AgentRuntime:
             summary = {key: value for key, value in output.items() if key in {"mode", "weekly_summary", "reference_count", "passed", "consistency_passed", "warnings", "invalid_citations"}}
             return summary or output
         return {"result": str(output)}
+
+    @staticmethod
+    def _context_manifest(state: dict[str, Any]) -> dict[str, Any]:
+        config = normalize_context_config(state.get("context_config"))
+        memories = state.get("memory_context", [])
+        evidence = state.get("evidence", [])
+        facts = state.get("facts", [])
+        layers = [
+            {
+                "key": "instruction",
+                "label": "任务指令",
+                "items": 1,
+                "characters": len(state.get("goal", "")),
+                "role": "定义交付目标与输出边界",
+            },
+            {
+                "key": "source",
+                "label": "工作区材料",
+                "items": len(_sentences(state.get("source_text", ""))),
+                "characters": len(state.get("source_text", "")),
+                "role": "仅作为检索语料，不直接进入最终结论",
+            },
+            {
+                "key": "memory",
+                "label": "Session Memory",
+                "items": len(memories),
+                "characters": sum(len(str(item.get("content", ""))) for item in memories),
+                "role": "只影响表达偏好，不作为事实证据",
+            },
+            {
+                "key": "evidence",
+                "label": "Evidence Context",
+                "items": len(evidence),
+                "characters": sum(len(str(item.get("excerpt", ""))) for item in evidence),
+                "role": "提供可追溯的事实与引用编号",
+            },
+        ]
+        return {
+            "strategy": "layered_context_v1",
+            "audience": config["audience"],
+            "focus": FOCUS_LABELS[config["focus"]],
+            "evidence_budget": config["evidence_limit"],
+            "citation_policy": config["citation_policy"],
+            "layers": layers,
+            "facts_created": len(facts),
+            "policies": [
+                "任务指令、材料、记忆与证据分层注入",
+                "Session Memory 不作为事实或引用来源",
+                "所有生成结论只能引用 Evidence ID",
+                "缺少材料支持的负责人、日期和结论标记为待确认",
+            ],
+        }

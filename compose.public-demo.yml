@@ -10,6 +10,8 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.deepseek.com/v1}
       MODEL_NAME: ${MODEL_NAME:-deepseek-chat}
+      DOCFLOW_MAX_WORKERS: ${DOCFLOW_MAX_WORKERS:-2}
+      DOCFLOW_MAX_PENDING: ${DOCFLOW_MAX_PENDING:-20}
     volumes:
       - docflow_data:/app/data
     mem_limit: 640m

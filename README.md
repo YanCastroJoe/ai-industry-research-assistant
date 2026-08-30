@@ -8,7 +8,7 @@
 
 [直接打开 DocFlow 公网演示](http://124.221.243.125:8010)
 
-推荐使用页面内置样例，创建任务后查看计划、6 个工具步骤、执行轨迹、引用校验与审核导出流程。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
+推荐使用页面内置样例，创建任务后查看 Context Manifest、执行计划、交互式工具链路、引用校验与审核导出流程。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
 
 ## 项目解决的问题
 
@@ -19,16 +19,21 @@
 - **安全 Planner**：支持 OpenAI-compatible/DeepSeek 模型规划；计划执行前进行工具白名单、依赖顺序、重复调用和最大步数校验，模型不可用或计划非法时回退到 RulePlanner。
 - **可靠执行与恢复**：每个工具配置超时、有限重试与错误分类；按尝试记录 Trace，成功步骤写入 SQLite 检查点，失败任务可从最近成功步骤继续执行。
 - **Session Memory**：按 `session_id` 隔离保存协作偏好，并根据当前目标召回；Memory 只影响结构与表达，不作为事实或引用来源。
+- **Context Engineering**：将任务指令、工作区材料、Session Memory 与 Evidence Context 分层管理；支持受众、信息焦点、证据预算、记忆开关和引用策略配置，并输出可检查的 Context Manifest。
 - **MCP 工具接入**：基于官方 MCP Python SDK 实现 stdio Server 与 Adapter，完成工具发现、Schema 读取和调用；本地检索工具可通过 MCP 替换原 Tool Registry 实现。
 - **证据约束与人工审核**：所有文档使用 `[E#]` 引用；Verifier 检查引用可追溯性和跨产出一致性，审核通过后才允许导出 Markdown。
-- **可观测与评测**：记录 Planner 模式、步骤/尝试级 Trace、延迟、重试次数、Token 估算；固定集评测覆盖工具选择、引用通过率、延迟与故障恢复。
+- **可观测与评测**：将真实 Plan、工具步骤、尝试次数、输入输出摘要和耗时渲染为可交互执行链路；固定集评测覆盖工具选择、引用通过率、延迟与故障恢复。
+- **AgentOps 质量门禁**：聚合 SQLite 任务历史中的 Trace、Verifier 和人工审核结果，展示引用通过率、工具成功率、审核通过率、重试率、P95 延迟及最近运行诊断；明确区分本地回归指标与生产 SLA。
+- **异步任务生命周期**：受控线程池支持任务排队与后台执行，前端轮询展示 `queued → running → awaiting_review/failed` 状态、步骤进度和队列占用；同步接口继续保留用于调试。
+- **幂等与结构化观测**：异步接口接受 `Idempotency-Key`，相同请求复用已有 Task、内容冲突返回 409；HTTP 与后台任务事件输出 JSON 日志，并通过 `X-Request-ID` 关联请求和任务。
 
 ## 架构
 
 ```mermaid
 flowchart TD
-    A[材料 + 自然语言目标 + Session ID] --> B[Memory Recall]
-    B --> C[LLM Planner / RulePlanner]
+    A[材料 + 自然语言目标 + Session ID] --> B[Context Assembler]
+    B --> B1[Instruction / Source / Memory / Evidence]
+    B1 --> C[LLM Planner / RulePlanner]
     C --> D[计划白名单与依赖校验]
     D --> E[Agent Runtime]
     E --> F[Tool Registry]
@@ -51,7 +56,12 @@ flowchart TD
 | Runtime | `ExecutionPolicy`、attempt-level Trace | 瞬时失败自动重试；非瞬时错误快速失败 |
 | Recovery | SQLite checkpoint、parent run、next sequence | 失败后新 Run 从上次成功步骤继续，不重复前置步骤 |
 | Memory | session 隔离、目标相关召回 | 召回内容仅作为协作偏好传入语义分析模块 |
+| Context | 分层上下文、受众/焦点/证据预算配置、Context Manifest | Memory 与事实证据隔离；检索数量受预算约束 |
 | MCP | FastMCP Server + stdio ClientSession Adapter | 真实完成 `list_tools` 与 `call_tool`，保留输入 Schema |
+| Observability | 交互式执行链路、步骤详情、输入输出摘要 | 可定位具体工具、尝试次数、耗时与失败原因 |
+| AgentOps | 运行质量汇总、质量门禁、人工审核反馈统计 | 支持从异常任务回跳到具体 Trace；指标口径声明为本地任务历史 |
+| Async Jobs | 2 个 Worker、20 个在途任务上限、状态轮询 | HTTP 请求快速返回 Task ID；SQLite 使用 WAL、busy timeout 与独立连接降低并发写冲突 |
+| Operations | Request ID、JSON 事件日志、存活/就绪检查 | `/ready` 检查 SQLite、队列与公开运行配置，不暴露密钥 |
 | Evaluation | 20 条固定任务 + 合成故障场景 | 工具选择、引用通过率、延迟、重试恢复均可离线回归 |
 
 ## 本地运行
@@ -88,20 +98,27 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-2026-08-07 本地规则模式结果：19 项测试通过；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
+2026-08-29 本地规则模式结果：25 项测试通过；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
 
 ## API 摘要
 
-- `POST /api/docflow/tasks`：创建并运行协作任务。
+- `POST /api/docflow/tasks`：创建并同步运行协作任务。
+- `POST /api/docflow/jobs`：创建后台任务并立即返回 Task ID 与轮询地址。
+- `POST /api/docflow/jobs/file`：上传文件并创建后台任务。
+- `GET /api/docflow/jobs/{task_id}`：查询排队、执行进度、当前工具及终态。
+- `GET /health`：进程存活检查。
+- `GET /ready`：SQLite、队列容量与运行模式就绪检查。
 - `POST /api/docflow/tasks/{task_id}/retry`：从最近失败检查点恢复。
 - `POST /api/docflow/memories`：写入指定会话的协作偏好。
 - `GET /api/docflow/memories/{session_id}`：查看会话记忆。
+- `GET /api/docflow/evaluations/summary`：查看本地任务历史的运行质量、质量门禁和最近任务诊断。
 - `POST /api/docflow/tasks/{task_id}/review`：人工通过或驳回。
 - `GET /api/docflow/tasks/{task_id}/export`：审核通过后导出 Markdown。
 
 ## 项目边界
 
 - 当前 20 条数据是固定、合成的回归集，100% 仅表示该集合未回归，不等同于生产准确率。
+- 异步队列位于当前应用进程内，适合本地或单实例演示；进程重启时会将未完成任务标记为失败并提示重新提交，但不会自动恢复队列，不等同于 Celery/Redis 等生产级持久化队列。
 - 引用校验能验证 Evidence ID 的存在性和部分跨产出一致性，不等同于完整语义蕴含判定。
 - Session Memory 存储协作偏好，不把历史偏好冒充材料事实。
 - MCP 演示覆盖真实协议调用与适配层，尚未接入需要鉴权的第三方生产服务。
