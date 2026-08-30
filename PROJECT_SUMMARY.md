@@ -12,9 +12,9 @@
 
 ### 一页简历精简版（推荐）
 
-- 面向项目材料分散、文档生成不可追踪的问题，设计 `Planner → Tool Registry → Agent Runtime` 工作流，并以 Instruction/Source/Memory/Evidence 分层上下文驱动检索、事实抽取、带 `[E#]` 引用的文档生成与人工审核。
-- 实现 SafePlanner 白名单校验与 RulePlanner 回退，以及超时重试、错误分类、SQLite `Task/Run/Step/Attempt` Trace/Checkpoint；支持异步排队、幂等提交与 queued 任务重启恢复。
-- 基于官方 MCP Python SDK 完成 stdio 工具发现与调用，并通过 AgentOps 汇总引用、工具成功率和运行诊断；DocFlow 相关 19 项自动化测试通过，固定回归集 20/20，工具选择 Precision/Recall 与引用通过率均为 100%（仅代表固定集）。
+- 设计 `Planner → Tool Registry → Agent Runtime` 工作流，以 Instruction/Source/Memory/Evidence 分层上下文驱动检索、事实抽取和带 `[E#]` 引用的文档生成，并接入人工审核。
+- 实现 SafePlanner 工具白名单、RulePlanner 回退、超时重试与 SQLite Trace/Checkpoint；支持异步排队、幂等提交及 `queued` 任务重启恢复。
+- 基于官方 MCP Python SDK 接入 stdio 工具，并以 AgentOps 汇总引用和运行诊断；DocFlow 相关 19 项测试通过，固定回归集 20/20（仅代表固定集）。
 
 ### 详细版
 
