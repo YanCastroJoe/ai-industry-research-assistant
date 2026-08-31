@@ -8,7 +8,7 @@
 
 [直接打开 DocFlow 公网演示](http://124.221.243.125:8010)
 
-推荐使用页面内置样例，创建任务后查看 Context Manifest、执行计划、交互式工具链路、引用校验、AgentOps 质量门禁与审核导出流程。侧边栏仅保留任务名称和状态，并支持按屏幕宽度拉伸。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
+推荐从左侧业务模板创建任务：首屏先展示任务上下文、Context Engineering 配置与材料输入，提交后再进入“执行进度 + Run Inspector”双栏工作区，查看 Context Manifest、工具链路、引用校验、AgentOps 质量门禁和审核导出。公网实例采用 RulePlanner 和本地语义规则，不需要模型密钥，适合面试现场稳定演示。
 
 ## 项目解决的问题
 
@@ -26,6 +26,7 @@
 - **AgentOps 质量门禁**：聚合 SQLite 任务历史中的 Trace、Verifier 和人工审核结果，展示引用通过率、工具成功率、审核通过率、重试率、P95 延迟及最近运行诊断；明确区分本地回归指标与生产 SLA。
 - **异步任务生命周期**：受控线程池支持任务排队与后台执行，前端轮询展示 `queued → running → awaiting_review/failed` 状态、步骤进度和队列占用；排队任务载荷持久化到 SQLite，服务重启后自动重新入队，同步接口继续保留用于调试。
 - **幂等与结构化观测**：异步接口接受 `Idempotency-Key`，相同请求复用已有 Task、内容冲突返回 409；HTTP 与后台任务事件输出 JSON 日志，并通过 `X-Request-ID` 关联请求和任务。
+- **任务优先的演示界面**：空状态聚焦任务创建，运行后按执行进度与检查器分栏；侧边栏仅保留历史任务名称和状态，避免把实现说明混入用户操作路径。
 
 ## 架构
 
@@ -62,6 +63,7 @@ flowchart TD
 | AgentOps | 运行质量汇总、质量门禁、人工审核反馈统计 | 支持从异常任务回跳到具体 Trace；指标口径声明为本地任务历史 |
 | Async Jobs | 2 个 Worker、20 个在途任务上限、状态轮询 | HTTP 请求快速返回 Task ID；SQLite 使用 WAL、busy timeout 与独立连接降低并发写冲突 |
 | Operations | Request ID、JSON 事件日志、存活/就绪检查 | `/ready` 检查 SQLite、队列与公开运行配置，不暴露密钥 |
+| Product UI | 业务模板、任务优先空状态、运行检查器、独立 AgentOps 页 | 首次使用先完成任务输入，运行后再展开执行诊断与审核 |
 | Evaluation | 20 条固定任务 + 合成故障场景 | 工具选择、引用通过率、延迟、重试恢复均可离线回归 |
 
 ## 本地运行
@@ -98,7 +100,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-2026-08-30 本地规则模式结果：项目测试套件 26 项通过（其中 DocFlow 相关 19 项）；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
+2026-08-31 本地规则模式结果：项目测试套件 26 项通过（其中 DocFlow 相关 19 项）；20/20 固定任务通过，Optional Tool Precision/Recall 与 Citation Pass Rate 均为 100%；合成检索故障在第 2 次尝试恢复。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
 
 ## API 摘要
 

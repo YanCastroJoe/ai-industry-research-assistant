@@ -1,67 +1,53 @@
-# 产品规格（MVP）
+# DocFlow 产品规格
 
 ## 1. 用户任务
 
-用户粘贴一段公司、产业或宏观材料，或上传一份 PDF。系统识别材料类型后，生成带原文证据的研究卡片。用户可以审核、编辑或驳回草稿；只有审核通过的内容可导出为研究简报。
+用户输入项目材料与自然语言交付目标，系统将任务拆成受约束的工具执行链，生成带 Evidence ID 的周报、风险清单和汇报大纲。用户可以检查上下文、计划、工具 Trace 与引用，再决定通过、驳回或导出。
 
-## 2. 状态流
+## 2. 任务状态
 
 ```text
-draft -> processing -> evidence_ready -> pending_review
-pending_review -> approved -> exported
-pending_review -> rejected -> processing
+queued -> running -> awaiting_review -> approved -> exported
+                    -> failed -> retry -> awaiting_review
 ```
 
-`processing` 阶段出现解析或模型调用失败时，任务进入 `failed`，保留错误信息和可重试入口。
+- `queued`：任务载荷已写入 SQLite，等待 Worker 执行。
+- `running`：Planner 与 Runtime 正在执行，持续记录 Step/Attempt Trace。
+- `awaiting_review`：生成与引用校验完成，等待人工决策。
+- `failed`：保留错误分类、执行轨迹和最近成功检查点。
+- `approved`：人工确认内容可用，允许导出 Markdown。
 
-## 3. 研究卡片数据结构
+## 3. 上下文与执行结构
 
-```json
-{
-  "material_type": "company | industry | macro",
-  "summary": "不超过 120 字的事实摘要",
-  "facts": [
-    {
-      "claim": "可被材料直接支持的事实",
-      "evidence": "对应原文片段",
-      "source_location": "页码或段落位置"
-    }
-  ],
-  "impact_dimensions": ["经营", "供需", "政策", "成本"],
-  "impact_chain": ["事件", "受影响环节", "待确认对象"],
-  "industry_analysis": {
-    "industry_judgment": "基于事实的产业判断",
-    "causal_chain": ["事实 -> 变量 -> 行业传导"],
-    "direction_analysis": ["产业环节与验证条件，不映射个股"],
-    "risk_reversals": ["可能推翻当前判断的条件"]
-  },
-  "verification_items": ["需要进一步查证的内容"],
-  "risk_notice": "不构成投资建议"
-}
-```
+| 层级 | 作用 | 约束 |
+| --- | --- | --- |
+| Instruction | 当前任务目标与输出要求 | 只影响本次执行 |
+| Source | 用户提供的项目材料 | 原始事实来源 |
+| Memory | 指定会话的协作偏好 | 不作为事实或引用来源 |
+| Evidence | 从 Source 检索出的证据片段 | 以 `[E#]` 进入生成与校验 |
+
+计划必须通过工具白名单、依赖顺序、重复调用和最大步数检查。工具失败按错误类型决定快速失败或有限重试；恢复任务从最近成功检查点继续。
 
 ## 4. 页面与验收
 
-| 页面 | MVP 功能 | 验收条件 |
+| 区域 | 核心功能 | 验收条件 |
 | --- | --- | --- |
-| 新建研究 | 粘贴文本、上传 PDF、选择或自动识别材料类型 | 成功创建任务，显示处理状态 |
-| 研究详情 | 展示摘要、事实卡片、证据片段和待验证项 | 每条事实均有非空证据 |
-| 审核页 | 通过、编辑、驳回 | 未通过审核不能导出 |
-| 历史页 | 查看任务状态与最终简报 | 可按材料类型和状态筛选 |
-| 导出 | 生成 Markdown 简报 | 简报含证据和风险提示 |
+| 任务工作台 | 业务模板、上下文配置、目标与材料输入 | 空状态首先完成任务输入，不提前堆叠运行诊断 |
+| 执行进度 | 队列状态、当前步骤、工具链路 | 与真实 Task/Run 状态同步 |
+| Run Inspector | Context、Plan、Trace、Evidence、Output | 可定位工具输入、尝试次数、耗时和引用来源 |
+| Human Review | 通过、驳回、导出 | 未通过审核不能导出 |
+| AgentOps | 质量门禁和最近运行诊断 | 明确指标来自本地任务历史，不宣称生产 SLA |
 
-## 5. 非目标
+## 5. 可靠性要求
 
-- 不接入自动交易、不预测价格、不生成买卖建议。
-- MVP 不依赖实时爬虫或付费金融数据接口。
-- 不将模型推测伪装成已确认事实；材料未覆盖时必须写入待验证项。
+- 异步创建接受 `Idempotency-Key`，相同请求复用任务，内容冲突返回 409。
+- `queued` 任务在服务重启后重新入队；运行中的任务保留失败状态和检查点，不自动重放未知副作用。
+- `/health` 仅检查进程存活，`/ready` 检查 SQLite、队列容量和公开运行配置。
+- 所有导出内容必须通过 Evidence ID 存在性校验并完成人工审核。
 
-## 6. 推荐技术方案
+## 6. 项目边界
 
-- 前端：React + TypeScript。
-- 后端：FastAPI + Python。
-- 工作流：显式状态机；审核环节可中断并恢复。
-- 存储：SQLite，保存任务、卡片、审核记录与导出结果。
-- 模型接入：OpenAI-compatible API，通过环境变量配置，仓库不提交密钥。
-
-先实现文本输入闭环，再接入 PDF 解析；这样能优先验证 Agent 工作流，而不是被文件解析细节阻塞。
+- 当前是单 Agent 的可控工作流，不宣称多 Agent 协作或通用自主执行。
+- 固定 20 条任务与合成故障用于回归测试，不代表生产准确率。
+- MCP 已验证真实 stdio 协议与适配层，当前未接入需要生产鉴权的第三方服务。
+- SQLite 与进程内线程池适合单实例演示，不等同于分布式任务平台。
