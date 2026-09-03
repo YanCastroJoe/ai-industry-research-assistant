@@ -25,9 +25,12 @@ class ReleaseConfigurationTests(unittest.TestCase):
         self.assertIn("DOCFLOW_BIND_ADDRESS=127.0.0.1", example)
         self.assertIn("DOCFLOW_DEMO_PASSWORD=", example)
 
-    def test_readme_has_no_fixed_public_ip(self):
+    def test_readme_publishes_protected_demo_without_secret(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertNotIn("124.221.243.125", readme)
+        self.assertIn("https://", readme)
+        self.assertIn("浏览器 HTTP Basic Auth", readme)
+        self.assertIn("访问口令由本人随简历或面试邀请单独提供", readme)
+        self.assertNotIn("DOCFLOW_DEMO_PASSWORD=", readme)
         self.assertIn("受限公网演示", readme)
 
 
