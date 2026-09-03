@@ -1,1 +1,1 @@
-"""AI industry research assistant application package."""
+"""DocFlow collaborative document Agent application package."""

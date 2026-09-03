@@ -6,6 +6,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseConfigurationTests(unittest.TestCase):
+    def test_public_api_exposes_docflow_scope_without_legacy_research_routes(self):
+        main_source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('FastAPI(title="DocFlow 协作式文档 Agent"', main_source)
+        self.assertNotIn('/api/research', main_source)
+        self.assertNotIn('TaskRepository', main_source)
+
     def test_public_compose_binds_locally_and_requires_demo_credentials(self):
         compose = (ROOT / "compose.public-demo.yml").read_text(encoding="utf-8")
         self.assertIn('${DOCFLOW_BIND_ADDRESS:-127.0.0.1}', compose)

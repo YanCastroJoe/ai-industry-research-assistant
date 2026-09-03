@@ -1,5 +1,7 @@
 # DocFlow 协作式文档 Agent V2
 
+[![DocFlow CI](https://github.com/YanCastroJoe/ai-industry-research-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/YanCastroJoe/ai-industry-research-assistant/actions/workflows/ci.yml)
+
 > 将会议纪要、项目材料或 PDF 转化为可追溯、可恢复、经人工审核后才能导出的业务文档。
 
 这是一个面向 Agent 应用工程岗位的个人项目。项目重点不是包装一个通用聊天界面，而是实现从上下文组织、受约束规划、工具执行、证据校验到人工审核的完整 Agent 运行闭环。
@@ -96,7 +98,7 @@ flowchart TD
 
 2026-09-03 本地回归结果：
 
-- 项目测试套件：80 项通过。
+- DocFlow 测试套件：74 项通过。
 - 固定合成任务：20/20 通过。
 - 覆盖 10 次连续运行、6 次并发运行、幂等提交、任务删除、损坏 PDF、Memory、Trace、Checkpoint、审核与导出。
 - 覆盖显式风险/行动/进展字段绑定、负责人和日期保留、Verifier 独立缺失检查、访客会话隔离、认证与限流。

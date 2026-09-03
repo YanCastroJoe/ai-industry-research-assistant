@@ -2,7 +2,7 @@
 
 ## 可发布内容
 
-- `app/`、`static/`、`tests/`、`scripts/`、`samples/` 与必要文档。
+- `app/`、`static/`、`tests/`、`scripts/` 与必要文档。
 - `Dockerfile`、`compose.public-demo.yml`、`requirements.txt`、`.env.example`。
 - 固定合成评测报告；报告必须明确它不是生产准确率。
 

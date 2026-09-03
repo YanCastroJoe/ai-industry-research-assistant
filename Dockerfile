@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.tx
 
 COPY app ./app
 COPY static ./static
-COPY samples ./samples
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \
