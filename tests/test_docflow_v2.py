@@ -1,13 +1,14 @@
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from app.docflow import AgentRuntime, retrieve_documents
+from app.docflow import AgentRuntime, derive_task_insights, extract_facts, retrieve_documents
 from app.docflow_repository import DocflowRepository
 from app.execution import ExecutionPolicy, RetryableToolError, ToolExecutionFailed
 from app.mcp_adapter import MCPServerConfig, MCPStdioToolAdapter
-from app.planning import PlanValidationError, build_rule_plan, validate_plan
+from app.planning import PlanValidationError, build_rule_plan, normalize_model_plan, validate_plan
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,6 +18,14 @@ SOURCE = """项目组本周完成需求澄清并确认三个交付里程碑。
 
 
 class DocflowV2Tests(unittest.TestCase):
+    def test_model_plan_phase_is_derived_from_allowlisted_tool(self) -> None:
+        raw_plan = build_rule_plan("生成项目周报和风险清单")
+        raw_plan[0]["phase"] = "search"
+        normalized = normalize_model_plan(raw_plan)
+        self.assertEqual(normalized[0]["phase"], "retrieve")
+        allowed = {step["tool_name"] for step in raw_plan}
+        self.assertEqual(validate_plan(normalized, allowed)[0]["phase"], "retrieve")
+
     def test_plan_validator_rejects_unknown_tool(self) -> None:
         plan = build_rule_plan("生成项目周报")
         plan.insert(-1, {"phase": "format", "tool_name": "delete_workspace", "purpose": "越权操作"})
@@ -93,6 +102,85 @@ class DocflowV2Tests(unittest.TestCase):
             recalled = repository.recall_memories("team-a", "生成管理层风险汇报")
             self.assertEqual(len(recalled), 1)
             self.assertEqual(recalled[0]["memory_key"], "汇报偏好")
+
+    def test_session_memory_upserts_by_key_and_recall_deduplicates_legacy_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = DocflowRepository(Path(directory) / "agent.db")
+            first = repository.add_memory("team-a", "汇报偏好", "风险优先")
+            unchanged = repository.add_memory("team-a", "汇报偏好", "风险优先")
+            updated = repository.add_memory("team-a", "汇报偏好", "行动项优先")
+            self.assertEqual(first["id"], unchanged["id"])
+            self.assertEqual(first["id"], updated["id"])
+            self.assertEqual(unchanged["operation"], "unchanged")
+            self.assertEqual(updated["operation"], "updated")
+            self.assertEqual(repository.list_memories("team-a")[0]["content"], "行动项优先")
+
+            with repository._connect() as connection:
+                connection.execute(
+                    "INSERT INTO docflow_memories (session_id, memory_key, content) VALUES (?, ?, ?)",
+                    ("team-a", "汇报偏好", "旧重复项"),
+                )
+            recalled = repository.recall_memories("team-a", "生成汇报")
+            self.assertEqual(sum(item["memory_key"] == "汇报偏好" for item in recalled), 1)
+
+    def test_unrelated_memory_is_not_recalled_as_recent_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = DocflowRepository(Path(directory) / "agent.db")
+            repository.add_memory("team-a", "临时备注", "明天下午购买咖啡和打印纸")
+            self.assertEqual(repository.recall_memories("team-a", "生成项目周报和风险清单"), [])
+
+    def test_fallback_memory_changes_structure_without_changing_evidence(self) -> None:
+        source = """本周完成知识清洗和检索联调。\n接口偶尔超时，可能影响验收。\n张浩计划9月5日前提交回归报告。"""
+        risk_memory = [{"id": 1, "memory_key": "协作偏好", "content": "先展示高风险事项，再展示负责人和截止时间"}]
+        progress_memory = [{"id": 2, "memory_key": "协作偏好", "content": "先展示已完成进展和里程碑，风险放在最后"}]
+        with patch.dict("os.environ", {"MODEL_API_KEY": ""}):
+            risk_result = AgentRuntime().execute("生成项目周报、风险清单和三页汇报大纲", source, memory_context=risk_memory)
+            progress_result = AgentRuntime().execute("生成项目周报、风险清单和三页汇报大纲", source, memory_context=progress_memory)
+            default_result = AgentRuntime().execute(
+                "生成项目周报、风险清单和三页汇报大纲",
+                source,
+                memory_context=[],
+                context_config={"memory_enabled": False},
+            )
+        self.assertEqual(risk_result["evidence"], progress_result["evidence"])
+        self.assertEqual(risk_result["facts"], progress_result["facts"])
+        self.assertLess(risk_result["artifacts"]["weekly_report_markdown"].index("## 关键风险"), risk_result["artifacts"]["weekly_report_markdown"].index("## 关键进展"))
+        self.assertLess(progress_result["artifacts"]["weekly_report_markdown"].index("## 关键进展"), progress_result["artifacts"]["weekly_report_markdown"].index("## 关键风险"))
+        self.assertLess(default_result["artifacts"]["weekly_report_markdown"].index("## 关键进展"), default_result["artifacts"]["weekly_report_markdown"].index("## 关键风险"))
+        self.assertNotEqual(risk_result["artifacts"]["weekly_report_markdown"], progress_result["artifacts"]["weekly_report_markdown"])
+        self.assertEqual(risk_result["memory"]["recalled"], 1)
+        self.assertEqual(risk_result["memory"]["applied"], 1)
+        self.assertEqual(default_result["memory"]["applied"], 0)
+        artifact_text = "\n".join(risk_result["artifacts"].values())
+        self.assertNotIn(risk_memory[0]["content"], artifact_text)
+        self.assertTrue(all(item["excerpt"] in source for item in risk_result["evidence"]))
+
+    def test_model_mode_records_recalled_and_applied_memory(self) -> None:
+        evidence = retrieve_documents("生成项目周报和风险清单", SOURCE)
+        facts = extract_facts(evidence)
+        model_payload = {
+            "weekly_summary": "项目已完成需求澄清。",
+            "weekly_summary_evidence_ids": ["E1"],
+            "progress": [{"content": facts[0]["claim"], "evidence_ids": [facts[0]["citation"]]}],
+            "risks": [], "actions": [], "background": [], "milestones": [], "slide_outline": [],
+        }
+
+        class FakeResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self):
+                import json
+                return json.dumps({"choices": [{"message": {"content": json.dumps(model_payload, ensure_ascii=False)}}]}, ensure_ascii=False).encode("utf-8")
+
+        with patch.dict("os.environ", {"MODEL_API_KEY": "test-key"}), patch("urllib.request.urlopen", return_value=FakeResponse()):
+            insights = derive_task_insights(
+                "生成项目周报和风险清单",
+                facts,
+                [{"id": 1, "memory_key": "协作偏好", "content": "风险优先"}],
+            )
+        self.assertEqual(insights["mode"], "model")
+        self.assertEqual(insights["memory_application"]["recalled"], 1)
+        self.assertEqual(insights["memory_application"]["applied"], 1)
 
     def test_mcp_stdio_adapter_discovers_and_calls_real_server(self) -> None:
         runtime = AgentRuntime()

@@ -13,6 +13,27 @@ REQUIRED_PREFIX = ("retrieve_documents", "extract_facts", "derive_task_insights"
 REQUIRED_SUFFIX = "verify_citations"
 OPTIONAL_DELIVERABLES = {"generate_risk_register", "generate_slide_outline"}
 ALLOWED_PHASES = {"retrieve", "extract", "reason", "compose", "format", "verify"}
+TOOL_PHASES = {
+    "retrieve_documents": "retrieve",
+    "extract_facts": "extract",
+    "derive_task_insights": "reason",
+    "compose_document": "compose",
+    "generate_risk_register": "format",
+    "generate_slide_outline": "format",
+    "verify_citations": "verify",
+}
+
+EXTERNAL_CAPABILITIES = {
+    "search_web": (
+        "联网搜索",
+        "网络搜索",
+        "上网搜索",
+        "搜索最新",
+        "最新行业新闻",
+        "实时新闻",
+    ),
+    "send_email": ("发送邮件", "发邮件", "邮件发送", "邮件通知"),
+}
 
 
 @dataclass(frozen=True)
@@ -24,6 +45,23 @@ class PlannerDecision:
 
 class PlanValidationError(ValueError):
     pass
+
+
+def required_external_capabilities(goal: str) -> list[str]:
+    """Extract explicit external actions that the local Tool Registry must support."""
+    return [
+        capability
+        for capability, phrases in EXTERNAL_CAPABILITIES.items()
+        if any(phrase in goal for phrase in phrases)
+    ]
+
+
+def validate_goal_capabilities(goal: str, allowed_tools: set[str]) -> None:
+    missing = [name for name in required_external_capabilities(goal) if name not in allowed_tools]
+    if missing:
+        labels = {"search_web": "联网搜索", "send_email": "发送邮件"}
+        readable = "、".join(labels.get(name, name) for name in missing)
+        raise PlanValidationError(f"当前 Tool Registry 缺少：{readable}；任务未执行，也不会包装为已完成。")
 
 
 def build_rule_plan(goal: str) -> list[dict[str, str]]:
@@ -88,9 +126,27 @@ def validate_plan(raw_plan: Any, allowed_tools: set[str]) -> list[dict[str, str]
     return plan
 
 
+def normalize_model_plan(raw_plan: Any) -> Any:
+    """Derive display phases from allow-listed tools before strict validation."""
+    if not isinstance(raw_plan, list):
+        return raw_plan
+    normalized: list[Any] = []
+    for raw_step in raw_plan:
+        if not isinstance(raw_step, dict):
+            normalized.append(raw_step)
+            continue
+        step = dict(raw_step)
+        tool_name = str(step.get("tool_name", "")).strip()
+        if tool_name in TOOL_PHASES:
+            step["phase"] = TOOL_PHASES[tool_name]
+        normalized.append(step)
+    return normalized
+
+
 class RulePlanner:
     def create_plan(self, goal: str, tools: list[dict[str, Any]]) -> PlannerDecision:
         allowed_tools = {str(tool["name"]) for tool in tools}
+        validate_goal_capabilities(goal, allowed_tools)
         return PlannerDecision(validate_plan(build_rule_plan(goal), allowed_tools), mode="rules")
 
 
@@ -106,6 +162,7 @@ class OpenAICompatiblePlanner:
         if not self.api_key:
             raise PlanValidationError("MODEL_API_KEY is not configured")
         allowed_tools = {str(tool["name"]) for tool in tools}
+        validate_goal_capabilities(goal, allowed_tools)
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -117,6 +174,9 @@ class OpenAICompatiblePlanner:
                         "你是 DocFlow 的 Planner。只返回 JSON 对象 {plan:[...]}。每一步必须包含 phase、tool_name、purpose。"
                         "固定依赖为 retrieve_documents -> extract_facts -> derive_task_insights -> compose_document，"
                         "中间只能按目标选择 generate_risk_register、generate_slide_outline，最后必须 verify_citations。"
+                        "phase 必须按工具填写：retrieve_documents=retrieve，extract_facts=extract，"
+                        "derive_task_insights=reason，compose_document=compose，"
+                        "generate_risk_register/generate_slide_outline=format，verify_citations=verify。"
                         "不得创造工具、不得重复工具，总步骤不超过 8。"
                     ),
                 },
@@ -134,8 +194,8 @@ class OpenAICompatiblePlanner:
                 response_payload = json.loads(response.read().decode("utf-8"))
             content = response_payload["choices"][0]["message"]["content"]
             raw_plan = _extract_json_object(content).get("plan")
-            return PlannerDecision(validate_plan(raw_plan, allowed_tools), mode="model")
-        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError, json.JSONDecodeError) as error:
+            return PlannerDecision(validate_plan(normalize_model_plan(raw_plan), allowed_tools), mode="model")
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, KeyError, ValueError, json.JSONDecodeError) as error:
             raise PlanValidationError(str(error)) from error
 
 

@@ -35,6 +35,7 @@ def evaluate_fixed_set() -> dict:
     failures: list[dict] = []
     latencies: list[float] = []
     citation_passes = 0
+    content_quality_passes = 0
     true_positive = false_positive = false_negative = 0
     planner_modes: dict[str, int] = {}
 
@@ -51,14 +52,16 @@ def evaluate_fixed_set() -> dict:
         false_positive += len(actual_optional - expected_optional)
         false_negative += len(expected_optional - actual_optional)
         citation_passes += int(result["verification"]["passed"])
+        content_quality_passes += int(result["verification"].get("content_quality_passed", False))
         mode = result["planner"]["mode"]
         planner_modes[mode] = planner_modes.get(mode, 0) + 1
-        if missing or not result["verification"]["passed"]:
+        if missing or not result["verification"]["passed"] or not result["verification"].get("content_quality_passed", False):
             failures.append(
                 {
                     "case_id": case["id"],
                     "missing_tools": sorted(missing),
                     "citation_passed": result["verification"]["passed"],
+                    "content_quality_passed": result["verification"].get("content_quality_passed", False),
                 }
             )
 
@@ -72,6 +75,7 @@ def evaluate_fixed_set() -> dict:
         "optional_tool_precision": round(precision, 4),
         "optional_tool_recall": round(recall, 4),
         "citation_pass_rate": round(citation_passes / len(cases), 4),
+        "content_quality_pass_rate": round(content_quality_passes / len(cases), 4),
         "latency_ms": {
             "mean": round(statistics.mean(latencies), 2),
             "p50": percentile(latencies, 0.5),

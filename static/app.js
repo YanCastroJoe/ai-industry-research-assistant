@@ -3,7 +3,7 @@ const message = document.querySelector('#form-message');
 const cardHost = document.querySelector('#card');
 const emptyState = document.querySelector('#empty-state');
 const taskList = document.querySelector('#task-list');
-const sampleButton = document.querySelector('#sample-button');
+const templateNotice = document.querySelector('#template-notice');
 const refreshEvaluationButton = document.querySelector('#refresh-evaluation');
 const jobProgress = document.querySelector('#job-progress');
 const appShell = document.querySelector('.app-shell');
@@ -14,7 +14,52 @@ const navItems = [...document.querySelectorAll('[data-section-target]')];
 const resultTabs = [...document.querySelectorAll('[data-result-target]')];
 const workspaceGrid = document.querySelector('#workspace-grid');
 const exampleTasks = [...document.querySelectorAll('[data-example]')];
+const deleteDialog = document.querySelector('#delete-dialog');
+const deleteDescription = document.querySelector('#delete-dialog-description');
+const deleteFeedback = document.querySelector('#delete-dialog-feedback');
+const cancelDeleteButton = document.querySelector('#cancel-delete');
+const confirmDeleteButton = document.querySelector('#confirm-delete');
+const openTemplateManagerButton = document.querySelector('#open-template-manager');
+const closeTemplateManagerButton = document.querySelector('#close-template-manager');
+const templateForm = document.querySelector('#template-form');
+const templateFormMessage = document.querySelector('#template-form-message');
+const customTemplateList = document.querySelector('#custom-template-list');
+const templateLibraryList = document.querySelector('#template-library-list');
+const taskContextMenu = document.querySelector('#task-context-menu');
+const menuDeleteTaskButton = document.querySelector('#menu-delete-task');
+const memoryList = document.querySelector('#memory-list');
+const refreshMemoriesButton = document.querySelector('#refresh-memories');
+const backendStatus = document.querySelector('#backend-status');
+const databaseStatus = document.querySelector('#database-status');
+const modelStatus = document.querySelector('#model-status');
+const expectedMode = document.querySelector('#expected-mode');
 let activeTaskId = null;
+let pendingDeleteTask = null;
+let contextMenuTask = null;
+let customTemplates = [];
+
+const VISITOR_SESSION_STORAGE_KEY = 'docflow.visitorSession.v1';
+const VISITOR_SESSION_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
+let sessionRefreshTimer = null;
+
+function createVisitorSessionId() {
+  const token = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+  return `visitor-${token}`;
+}
+
+function getActiveSessionId() {
+  const input = document.querySelector('#session-id');
+  let sessionId = input.value.trim();
+  if (!VISITOR_SESSION_PATTERN.test(sessionId) || sessionId === 'default') {
+    try { sessionId = localStorage.getItem(VISITOR_SESSION_STORAGE_KEY) || ''; } catch (_) { sessionId = ''; }
+  }
+  if (!VISITOR_SESSION_PATTERN.test(sessionId) || sessionId === 'default') sessionId = createVisitorSessionId();
+  input.value = sessionId;
+  try { localStorage.setItem(VISITOR_SESSION_STORAGE_KEY, sessionId); } catch (_) { /* Storage may be disabled. */ }
+  return sessionId;
+}
+
+getActiveSessionId();
 
 const demoExamples = {
   weekly: {
@@ -55,22 +100,30 @@ function setWorkspaceMode(mode) {
   workspaceGrid.classList.toggle('is-active', mode === 'active');
 }
 
-function loadDemoExample(key = 'weekly') {
-  const example = demoExamples[key] || demoExamples.weekly;
+function loadTemplate(example, key = '') {
+  resetWorkspace();
   document.querySelector('#title').value = example.title;
-  document.querySelector('#session-id').value = `${key}-demo`;
+  document.querySelector('#session-id').value = getActiveSessionId();
   document.querySelector('#run-mode').value = 'async';
   document.querySelector('#memory').value = '面向目标受众，优先展示风险、负责人和截止时间';
   document.querySelector('#audience').value = example.audience;
   document.querySelector('#context-focus').value = example.focus;
-  document.querySelector('#evidence-limit').value = '9';
+  document.querySelector('#evidence-limit').value = '12';
   document.querySelector('#citation-policy').value = 'strict';
   document.querySelector('#memory-enabled').checked = true;
   document.querySelector('#goal').value = example.goal;
-  document.querySelector('#text').value = example.text;
+  document.querySelector('#text').value = example.text || example.source_text || '';
+  exampleTasks.forEach((button) => button.classList.toggle('loaded', Boolean(key) && button.dataset.example === key));
+  templateNotice.textContent = `已载入“${example.title}”模板，内容可继续修改后运行。`;
+  templateNotice.hidden = false;
   activateMainView('workspace-view');
   setWorkspaceMode('idle');
+  loadMemoriesForSession();
   document.querySelector('#goal').focus();
+}
+
+function loadDemoExample(key = 'weekly') {
+  loadTemplate(demoExamples[key] || demoExamples.weekly, key);
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 248;
@@ -156,6 +209,31 @@ function activateMainView(targetId) {
   navItems.forEach((item) => item.classList.toggle('active', item.dataset.sectionTarget === targetId));
 }
 
+function openTemplateManager() {
+  activateMainView('template-manager');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  document.querySelector('#template-name').focus();
+}
+
+function resetWorkspace() {
+  form.reset();
+  document.querySelector('#session-id').value = getActiveSessionId();
+  activeTaskId = null;
+  taskList.querySelectorAll('.task.active').forEach((item) => item.classList.remove('active'));
+  document.querySelectorAll('.advanced-settings[open]').forEach((section) => { section.open = false; });
+  cardHost.replaceChildren();
+  cardHost.hidden = true;
+  emptyState.hidden = false;
+  message.textContent = '';
+  jobProgress.hidden = true;
+  templateNotice.hidden = true;
+  templateNotice.textContent = '';
+  exampleTasks.forEach((button) => button.classList.remove('loaded'));
+  setWorkspaceMode('idle');
+  activateResultView('result');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function activateResultView(target) {
   resultTabs.forEach((tab) => {
     const active = tab.dataset.resultTarget === target;
@@ -173,6 +251,7 @@ try { setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
 sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!appShell.classList.contains('sidebar-collapsed')));
 navItems.forEach((item) => item.addEventListener('click', (event) => {
   event.preventDefault();
+  if (item.dataset.sectionTarget === 'workspace-view') resetWorkspace();
   activateMainView(item.dataset.sectionTarget);
 }));
 resultTabs.forEach((tab) => tab.addEventListener('click', () => activateResultView(tab.dataset.resultTarget)));
@@ -193,12 +272,162 @@ const toolLabels = {
 };
 
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
+  const headers = new Headers(options.headers || {});
+  headers.set('X-DocFlow-Session', getActiveSessionId());
+  const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.detail || '请求失败，请稍后重试。');
+    const detail = data.detail;
+    const message = typeof detail === 'string' ? detail : detail?.message;
+    throw new Error(message || '请求失败，请稍后重试。');
   }
   return response;
+}
+
+function setRuntimeChip(chip, text, state = 'ok') {
+  chip.textContent = text;
+  chip.classList.remove('status-ok', 'status-warning', 'status-error', 'status-unknown');
+  chip.classList.add(`status-${state}`);
+}
+
+async function loadRuntimeStatus() {
+  try {
+    const readiness = await (await request('/ready')).json();
+    setRuntimeChip(backendStatus, readiness.service?.ok ? '后端正常' : '后端异常', readiness.service?.ok ? 'ok' : 'error');
+    setRuntimeChip(databaseStatus, readiness.database?.ok ? '数据库正常' : '数据库异常', readiness.database?.ok ? 'ok' : 'error');
+    const runtime = readiness.runtime || {};
+    if (!runtime.model_configured) {
+      setRuntimeChip(modelStatus, '模型未配置', 'warning');
+      expectedMode.textContent = '预计执行模式：本地规则（未配置模型）';
+    } else {
+      setRuntimeChip(modelStatus, '模型已配置 · 待运行验证', 'unknown');
+      expectedMode.textContent = '预计执行模式：优先模型；调用失败时自动降级为本地规则';
+    }
+  } catch (error) {
+    setRuntimeChip(backendStatus, '后端不可用', 'error');
+    setRuntimeChip(databaseStatus, '数据库状态未知', 'unknown');
+    setRuntimeChip(modelStatus, '模型状态未知', 'unknown');
+    expectedMode.textContent = `预计执行模式：状态检查失败（${error.message}）`;
+  }
+}
+
+function formatMemoryTime(value) {
+  if (!value) return '未知时间';
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function renderMemories(memories) {
+  if (!memories.length) {
+    memoryList.innerHTML = '<p class="memory-empty">当前会话没有 Memory，填写“协作偏好”并运行后会保存。</p>';
+    return;
+  }
+  memoryList.replaceChildren(...memories.map((memory) => {
+    const item = document.createElement('article');
+    item.className = `memory-item ${memory.enabled ? '' : 'disabled'}`;
+    const source = memory.source_task_id ? `任务 #${memory.source_task_id}` : '工作台手动输入';
+    item.innerHTML = `<div class="memory-item-head"><strong>${escapeHtml(memory.memory_key)}</strong><span>${memory.enabled ? '已启用' : '已禁用'}</span></div><p>${escapeHtml(memory.content)}</p><small>来源：${escapeHtml(source)} · 创建：${escapeHtml(formatMemoryTime(memory.created_at))}<br>更新：${escapeHtml(formatMemoryTime(memory.updated_at || memory.created_at))}</small><div class="memory-item-actions"><button class="secondary memory-edit" type="button">编辑</button><button class="secondary memory-toggle" type="button">${memory.enabled ? '禁用' : '启用'}</button><button class="secondary memory-delete" type="button">删除</button></div>`;
+    item.querySelector('.memory-edit').addEventListener('click', () => {
+      if (item.querySelector('.memory-editor')) return;
+      const editor = document.createElement('div');
+      editor.className = 'memory-editor';
+      editor.innerHTML = `<textarea aria-label="编辑 ${escapeHtml(memory.memory_key)}">${escapeHtml(memory.content)}</textarea><div class="memory-item-actions"><button type="button" class="memory-save">保存修改</button><button type="button" class="secondary memory-cancel">取消</button></div>`;
+      editor.querySelector('.memory-cancel').addEventListener('click', () => editor.remove());
+      editor.querySelector('.memory-save').addEventListener('click', async () => {
+        const content = editor.querySelector('textarea').value.trim();
+        if (content.length < 2) return;
+        await request(`/api/docflow/memories/${memory.id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+        });
+        await loadMemoriesForSession();
+      });
+      item.append(editor);
+      editor.querySelector('textarea').focus();
+    });
+    item.querySelector('.memory-toggle').addEventListener('click', async () => {
+      await request(`/api/docflow/memories/${memory.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !Boolean(memory.enabled) }),
+      });
+      await loadMemoriesForSession();
+    });
+    item.querySelector('.memory-delete').addEventListener('click', async () => {
+      if (!window.confirm(`确定删除“${memory.memory_key}”吗？此操作不可撤销。`)) return;
+      await request(`/api/docflow/memories/${memory.id}`, { method: 'DELETE' });
+      await loadMemoriesForSession();
+    });
+    return item;
+  }));
+}
+
+async function loadMemoriesForSession() {
+  const sessionId = getActiveSessionId();
+  refreshMemoriesButton.disabled = true;
+  try {
+    const memories = await (await request(`/api/docflow/memories/${encodeURIComponent(sessionId)}`)).json();
+    renderMemories(memories);
+  } catch (error) {
+    memoryList.innerHTML = `<p class="memory-empty">Memory 加载失败：${escapeHtml(error.message)}</p>`;
+  } finally {
+    refreshMemoriesButton.disabled = false;
+  }
+}
+
+function renderCustomTemplates() {
+  const createTemplateButton = (template, className = 'example-task custom-template') => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.innerHTML = `<strong>${escapeHtml(template.name)}</strong><small>${escapeHtml(template.audience)} · 自定义</small>`;
+    button.addEventListener('click', () => loadTemplate(template));
+    return button;
+  };
+  customTemplateList.replaceChildren(...customTemplates.map((template) => createTemplateButton(template)));
+  if (!customTemplates.length) {
+    const empty = document.createElement('p');
+    empty.className = 'template-library-empty';
+    empty.textContent = '还没有自定义模板。';
+    templateLibraryList.replaceChildren(empty);
+    return;
+  }
+  templateLibraryList.replaceChildren(...customTemplates.map((template) => {
+    const item = document.createElement('article');
+    item.className = 'template-library-item';
+    item.innerHTML = `<div><strong>${escapeHtml(template.name)}</strong><p>${escapeHtml(template.title)}</p><small>${escapeHtml(template.audience)} · ${escapeHtml(template.focus)}</small></div>`;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = '带入工作台';
+    button.addEventListener('click', () => loadTemplate(template));
+    item.append(button);
+    return item;
+  }));
+}
+
+async function loadCustomTemplates() {
+  customTemplates = await (await request('/api/docflow/templates')).json();
+  renderCustomTemplates();
+}
+
+function closeTaskContextMenu() {
+  taskContextMenu.hidden = true;
+  contextMenuTask = null;
+}
+
+function openTaskContextMenu(task, x, y) {
+  if (['queued', 'running'].includes(task.status)) return;
+  contextMenuTask = task;
+  taskContextMenu.hidden = false;
+  const menuWidth = 140;
+  const menuHeight = 46;
+  taskContextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8))}px`;
+  taskContextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))}px`;
+  menuDeleteTaskButton.focus();
+}
+
+function openTaskMenuFromButton(task, button) {
+  const rect = button.getBoundingClientRect();
+  openTaskContextMenu(task, rect.right - 132, rect.bottom + 4);
 }
 
 function escapeHtml(value) {
@@ -207,7 +436,11 @@ function escapeHtml(value) {
   return element.innerHTML;
 }
 
-function renderRiskRegister(markdown, host) {
+function stripEvidenceMarkers(value) {
+  return String(value || '').replace(/\s*\[E\d+\]/g, '').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+function renderRiskRegister(markdown, host, showCitations = false) {
   const lines = markdown.split('\n').map((line) => line.trim()).filter(Boolean);
   const title = lines.find((line) => line.startsWith('## '));
   const tableLines = lines.filter((line) => line.startsWith('|'));
@@ -216,9 +449,30 @@ function renderRiskRegister(markdown, host) {
     return;
   }
   const cells = (line) => line.split('|').slice(1, -1).map((cell) => escapeHtml(cell.trim()));
-  const headers = cells(tableLines[0]);
-  const rows = tableLines.slice(2).map((line) => cells(line));
+  let headers = cells(tableLines[0]);
+  let rows = tableLines.slice(2).map((line) => cells(line));
+  if (!showCitations) {
+    const evidenceColumn = headers.findIndex((header) => header.includes('证据'));
+    if (evidenceColumn >= 0) {
+      headers = headers.filter((_, index) => index !== evidenceColumn);
+      rows = rows.map((row) => row.filter((_, index) => index !== evidenceColumn));
+    }
+    rows = rows.map((row) => row.map(stripEvidenceMarkers));
+  }
   host.innerHTML = `${title ? `<p class="artifact-heading">${escapeHtml(title.slice(3))}</p>` : ''}<div class="risk-table-scroll"><table class="risk-table"><thead><tr>${headers.map((cell) => `<th>${cell}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderArtifacts(artifacts, node, showCitations = false) {
+  const display = (value) => showCitations ? value : stripEvidenceMarkers(value);
+  node.querySelector('.artifact.document').textContent = display(artifacts.weekly_report_markdown || '尚未生成项目周报。');
+  if (artifacts.risk_register_markdown) {
+    node.querySelector('.table-wrap').hidden = false;
+    renderRiskRegister(artifacts.risk_register_markdown, node.querySelector('.artifact.table'), showCitations);
+  }
+  if (artifacts.slide_outline_markdown) {
+    node.querySelector('.slides-wrap').hidden = false;
+    node.querySelector('.artifact.slides').textContent = display(artifacts.slide_outline_markdown);
+  }
 }
 
 function formatPayload(value, limit = 900) {
@@ -275,8 +529,15 @@ async function loadEvaluationSummary() {
     [formatRate(metrics.approval_rate), '人工通过率'],
     [metrics.latency_p95_ms === null ? '--' : `${metrics.latency_p95_ms} ms`, 'P95 运行耗时'],
     [formatRate(metrics.retry_task_rate), '发生重试的任务'],
+    [metrics.verifier_human_miss_rate === null ? '--' : `${metrics.verifier_human_miss_count || 0} 条`, 'Verifier 通过但人工驳回'],
   ];
   document.querySelector('.evaluation-metrics').innerHTML = cards.map(([value, label]) => `<article><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></article>`).join('');
+  const modeLabels = { model: '模型模式', rules: '本地规则', rules_fallback: '规则降级' };
+  document.querySelector('.mode-breakdown').replaceChildren(...(summary.mode_breakdown || []).map((item) => {
+    const card = document.createElement('article');
+    card.innerHTML = `<strong>${escapeHtml(modeLabels[item.mode] || item.mode)}</strong><span>${escapeHtml(String(item.task_count))} 个任务</span><small>引用 ${escapeHtml(formatRate(item.citation_pass_rate))} · 内容 ${escapeHtml(formatRate(item.content_quality_pass_rate))}</small>`;
+    return card;
+  }));
 
   const gateHost = document.querySelector('.quality-gates');
   gateHost.replaceChildren(...(summary.quality_gates || []).map((gate) => {
@@ -292,9 +553,10 @@ async function loadEvaluationSummary() {
   tableBody.replaceChildren(...(summary.recent_tasks || []).map((task) => {
     const row = document.createElement('tr');
     const issues = task.issues?.length ? task.issues.join('；') : '无异常';
-    row.innerHTML = `<td><button type="button" class="evaluation-task-link">${escapeHtml(task.title)}</button><small>#${escapeHtml(String(task.task_id))} · ${escapeHtml(task.planner_mode || '未执行')}</small></td><td><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span></td><td>${task.elapsed_ms === null || task.elapsed_ms === undefined ? '--' : `${escapeHtml(String(task.elapsed_ms))} ms`}</td><td>${task.citation_passed === null || task.citation_passed === undefined ? '--' : task.citation_passed ? '通过' : '未通过'}</td><td class="${task.issues?.length ? 'diagnostic-warning' : 'diagnostic-ok'}">${escapeHtml(issues)}</td>`;
+    row.innerHTML = `<td><button type="button" class="evaluation-task-link">${escapeHtml(task.title)}</button><small>#${escapeHtml(String(task.task_id))} · ${escapeHtml(modeLabels[task.execution_mode] || task.execution_mode || task.planner_mode || '未执行')}</small></td><td><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span></td><td>${task.elapsed_ms === null || task.elapsed_ms === undefined ? '--' : `${escapeHtml(String(task.elapsed_ms))} ms`}</td><td>${task.citation_passed === null || task.citation_passed === undefined ? '--' : task.citation_passed ? '通过' : '未通过'}</td><td class="${task.issues?.length ? 'diagnostic-warning' : 'diagnostic-ok'}">${escapeHtml(issues)}</td>`;
     row.querySelector('.evaluation-task-link').addEventListener('click', async () => {
       renderTask(await (await request(`/api/docflow/tasks/${task.task_id}`)).json());
+      activateMainView('workspace-view');
       document.querySelector('#detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     return row;
@@ -310,6 +572,7 @@ function renderContextManifest(context, node) {
   const badges = [
     ['受众', manifest.audience || '项目团队'],
     ['焦点', manifest.focus || '均衡呈现'],
+    ['Memory', `${manifest.memory?.applied || 0}/${manifest.memory?.recalled || 0} 已应用`],
     ['证据预算', `${manifest.evidence_budget || 12} 条`],
     ['引用', manifest.citation_policy === 'strict' ? '严格校验' : '标准校验'],
   ];
@@ -339,9 +602,10 @@ function renderExecutionFlow(task, node) {
 
   const flowItems = [];
   if (task.result?.context) {
+    const memory = task.result.memory || {};
     flowItems.push({
-      key: 'context', label: 'Context', subtitle: `${task.result.context.layers?.length || 0} 层上下文`, status: 'completed',
-      detail: `<div class="trace-detail-head"><div><small>CONTEXT PREFLIGHT</small><h4>上下文分层与约束</h4></div><span class="trace-state completed">已完成</span></div><p>受众：${escapeHtml(task.result.context.audience)} · 焦点：${escapeHtml(task.result.context.focus)} · Evidence Budget：${escapeHtml(String(task.result.context.evidence_budget))}</p>`,
+      key: 'context', label: 'Context Builder', subtitle: `${task.result.context.layers?.length || 0} 层 · Memory ${memory.applied || 0}/${memory.recalled || 0}`, status: 'completed',
+      detail: `<div class="trace-detail-head"><div><small>CONTEXT BUILDER</small><h4>Instruction · Sources · Session Memory · Evidence</h4></div><span class="trace-state completed">已完成</span></div><p>受众：${escapeHtml(memory.effective_audience || task.result.context.audience)} · 焦点：${escapeHtml(memory.effective_focus || task.result.context.focus)} · Memory：召回 ${escapeHtml(String(memory.recalled || 0))} 条 / 应用 ${escapeHtml(String(memory.applied || 0))} 条 · Evidence Budget：${escapeHtml(String(task.result.context.evidence_budget))}</p>`,
     });
   }
   groups.forEach(([sequence, attempts]) => {
@@ -354,13 +618,16 @@ function renderExecutionFlow(task, node) {
       label: toolLabels[latest.tool_name] || latest.tool_name,
       subtitle: `${attempts.length} 次尝试 · ${elapsed} ms`,
       status,
-      detail: `<div class="trace-detail-head"><div><small>STEP ${escapeHtml(String(sequence))} · ${escapeHtml(latest.phase || 'runtime')}</small><h4>${escapeHtml(toolLabels[latest.tool_name] || latest.tool_name)}</h4><code>${escapeHtml(latest.tool_name)}</code></div><span class="trace-state ${escapeHtml(status)}">${escapeHtml(traceStatusLabels[status] || status)}</span></div><div class="trace-io"><div><strong>Input</strong><pre>${escapeHtml(formatPayload(latest.input))}</pre></div><div><strong>Output</strong><pre>${escapeHtml(formatPayload((completed || latest).output))}</pre></div></div>${latest.error ? `<p class="trace-error">${escapeHtml(latest.error)}</p>` : ''}<p class="trace-meta">${attempts.length} 次尝试 · 累计 ${elapsed} ms${attempts.length > 1 ? ' · 已记录重试轨迹' : ''}</p>`,
+      detail: `<div class="trace-detail-head"><div><small>STEP ${escapeHtml(String(sequence))} · ${escapeHtml(latest.phase || 'runtime')}</small><h4>${escapeHtml(toolLabels[latest.tool_name] || latest.tool_name)}</h4><code>${escapeHtml(latest.tool_name)}</code></div><span class="trace-state ${escapeHtml(status)}">${escapeHtml(traceStatusLabels[status] || status)}</span></div><div class="trace-io"><div><strong>Input</strong><pre>${escapeHtml(formatPayload(latest.input))}</pre></div><div><strong>Output</strong><pre>${escapeHtml(formatPayload((completed || latest).output))}</pre></div></div>${latest.error ? `<p class="trace-error">${escapeHtml(latest.error)}</p>` : ''}<p class="trace-meta">${attempts.length} 次尝试 · 累计 ${elapsed} ms${attempts.length > 1 ? ' · 已记录重试轨迹' : ''}</p>${traceLinkage(latest.tool_name, status, task)}`,
     });
   });
 
   const selectItem = (button, item) => {
     host.querySelectorAll('.flow-node').forEach((candidate) => candidate.classList.toggle('active', candidate === button));
     detail.innerHTML = item.detail;
+    detail.querySelectorAll('[data-trace-target]').forEach((link) => {
+      link.addEventListener('click', () => activateResultView(link.dataset.traceTarget));
+    });
   };
   flowItems.forEach((item, index) => {
     if (index > 0) {
@@ -380,6 +647,74 @@ function renderExecutionFlow(task, node) {
   if (!flowItems.length) detail.innerHTML = '<p>当前运行尚未产生执行轨迹。</p>';
 }
 
+function traceLinkage(toolName, status, task) {
+  if (status === 'failed') {
+    return '<div class="trace-linkage checkpoint"><span>Checkpoint</span><p>失败步骤已停止继续执行；可从最近成功检查点恢复，不必整条链路重跑。</p><button type="button" data-trace-target="review">查看恢复入口 →</button></div>';
+  }
+  if (['retrieve_documents', 'extract_facts', 'verify_citations'].includes(toolName)) {
+    const evidenceCount = task.result?.evidence?.length || 0;
+    return `<div class="trace-linkage evidence"><span>Evidence</span><p>此步骤与 ${escapeHtml(String(evidenceCount))} 条工作区证据及最终引用校验关联。</p><button type="button" data-trace-target="citations">核对证据 →</button></div>`;
+  }
+  if (['compose_document', 'generate_risk_register', 'generate_slide_outline'].includes(toolName)) {
+    return '<div class="trace-linkage artifact-link"><span>Artifact</span><p>该步骤生成可交付内容；结论仍需经过引用门禁与人工审核。</p><button type="button" data-trace-target="result">查看产出 →</button></div>';
+  }
+  return '';
+}
+
+function renderDecisionPath(task, node) {
+  const host = node.querySelector('.decision-grid');
+  const reason = node.querySelector('.decision-reason');
+  const run = task.runs?.[0] || {};
+  const steps = run.steps || [];
+  const completedSteps = new Set(steps.filter((step) => step.status === 'completed').map((step) => step.sequence)).size;
+  const retryCount = steps.filter((step) => step.status === 'retrying').length;
+  const evidenceCount = task.result?.evidence?.length || 0;
+  const verification = task.result?.verification || {};
+  const qualityKnown = verification.content_quality_passed !== undefined;
+  const qualityPassed = verification.content_quality_passed !== false;
+  const verificationLabel = !verification.passed
+    ? '引用门禁未通过'
+    : !qualityKnown
+      ? '引用门禁通过'
+      : qualityPassed
+        ? '引用与内容检查通过'
+        : '引用通过，内容需复核';
+  const reviewLabels = {
+    queued: '等待执行', running: '执行中', awaiting_review: '等待人工决策', approved: '已批准导出', rejected: '已驳回', failed: '可从检查点恢复',
+  };
+  const cards = [
+    { index: '01', tone: 'plan', title: '计划', value: task.plan?.length ? `${task.plan.length} 步已校验` : '等待计划', meta: `Planner · ${task.result?.planner?.mode || run.planner_mode || '未执行'}`, target: 'trace' },
+    { index: '02', tone: 'runtime', title: '执行', value: `${completedSteps}/${task.plan?.length || 0} 步完成`, meta: retryCount ? `${retryCount} 次重试已记录` : 'Trace 已持久化', target: 'trace' },
+    { index: '03', tone: verification.passed && qualityPassed ? 'evidence' : 'danger', title: '证据', value: verificationLabel, meta: `${evidenceCount} 条证据 · ${verification.reference_count || 0} 处引用`, target: 'citations' },
+    { index: '04', tone: task.status === 'approved' ? 'success' : task.status === 'failed' || task.status === 'rejected' ? 'danger' : 'review', title: '决策', value: reviewLabels[task.status] || task.status, meta: task.status === 'approved' ? '已开放 Markdown 导出' : '导出受审核状态控制', target: 'review' },
+  ];
+  host.replaceChildren(...cards.map((card) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `decision-card tone-${card.tone}`;
+    button.dataset.decisionTarget = card.target;
+    button.innerHTML = `<span>${card.index}</span><div><small>${escapeHtml(card.title)}</small><strong>${escapeHtml(card.value)}</strong><p>${escapeHtml(card.meta)}</p></div><b>→</b>`;
+    button.addEventListener('click', () => activateResultView(card.target));
+    return button;
+  }));
+  if (task.status === 'failed') {
+    const failed = [...steps].reverse().find((step) => step.status === 'failed');
+    reason.textContent = `${failed ? `第 ${failed.sequence} 步 ${toolLabels[failed.tool_name] || failed.tool_name} 失败；` : ''}已保留最近成功检查点，可进入人工审核页恢复。`;
+  } else if (task.status === 'awaiting_review') {
+    reason.textContent = verification.passed && qualityKnown && qualityPassed
+      ? '工具执行、引用追溯与内容质量检查已完成；当前停在人工审核门禁，审核前不可导出。'
+      : verification.passed && !qualityKnown
+        ? '该历史任务已通过引用门禁，但未执行新版内容质量检查；请人工复核后再作审核决定。'
+      : '工具执行已完成，但引用或内容质量检查仍需复核；请核对后再作审核决定。';
+  } else if (task.status === 'approved') {
+    reason.textContent = '执行、引用门禁与人工审核均已完成，当前结果允许导出。';
+  } else if (task.status === 'rejected') {
+    reason.textContent = '人工审核已驳回本次结果，当前结果不可导出。';
+  } else {
+    reason.textContent = '运行状态仍在变化；点击任一阶段可查看对应证据与决策依据。';
+  }
+}
+
 function renderTask(task) {
   activeTaskId = task.id;
   setWorkspaceMode('active');
@@ -388,15 +723,44 @@ function renderTask(task) {
   node.querySelector('.card-goal').textContent = `目标：${task.goal}`;
   const mode = task.result?.insights?.mode;
   const plannerMode = task.result?.planner?.mode || task.runs?.[0]?.planner_mode || '未执行';
-  const memoryUsed = task.result?.memory?.items_used || 0;
+  const execution = task.result?.execution || {};
+  const memoryResult = task.result?.memory || {};
+  const memoryRecalled = memoryResult.recalled ?? memoryResult.items_used ?? 0;
+  const memoryApplied = memoryResult.applied ?? memoryResult.items_used ?? 0;
   const contextLayers = task.result?.context?.layers?.length || 0;
-  node.querySelector('.task-mode').textContent = `${mode === 'model' ? '模型语义分析' : '本地规则分析'} · Planner：${plannerMode} · Context：${contextLayers} 层 · Session Memory：${memoryUsed} 条`;
+  const modeLabel = mode === 'model' ? '模型语义分析' : mode === 'rules_fallback' ? '本地规则降级' : '本地规则分析';
+  node.querySelector('.task-mode').textContent = `实际执行：${modeLabel} · Planner：${plannerMode} · Context：${contextLayers} 层 · Session Memory：召回 ${memoryRecalled} 条 · 应用 ${memoryApplied} 条`;
+  const executionAlert = node.querySelector('.execution-alert');
+  if (execution.degraded || mode === 'rules_fallback' || plannerMode === 'rules_fallback') {
+    executionAlert.hidden = false;
+    executionAlert.textContent = '本次已降级为本地规则。模型调用未完成，当前结果不应标记为模型输出；技术原因保留在完整结构化结果中。';
+    setRuntimeChip(modelStatus, '模型本次调用降级', 'warning');
+  } else if (mode === 'model') {
+    setRuntimeChip(modelStatus, '模型本次调用成功', 'ok');
+  }
+  const appliedMemory = node.querySelector('.applied-memory');
+  if (memoryRecalled > 0) {
+    appliedMemory.hidden = false;
+    appliedMemory.querySelector('.memory-summary').textContent = `已应用 Memory：${memoryApplied}/${memoryRecalled} 条`;
+    const memoryApplication = appliedMemory.querySelector('.memory-application');
+    const items = memoryResult.items || [];
+    if (items.length) {
+      memoryApplication.replaceChildren(...items.map((item) => {
+        const detail = document.createElement('article');
+        detail.innerHTML = `<strong>${escapeHtml(item.memory_key || '协作偏好')} · ${escapeHtml(item.focus || 'balanced')}</strong><p>${escapeHtml(item.content || '')}</p><small>影响范围：${escapeHtml((item.impacts || []).join('、') || '未应用到当前输出')}</small>`;
+        return detail;
+      }));
+    } else {
+      memoryApplication.innerHTML = '<article><strong>本次未应用召回内容</strong><p>召回记录未解析为受支持的结构偏好。</p><small>不会影响事实、Evidence 或引用。</small></article>';
+    }
+  }
   const metrics = task.result?.metrics || {};
   const metricHost = node.querySelector('.run-metrics');
   const metricItems = metrics.elapsed_ms === undefined
     ? [['--', '任务耗时'], ['--', '工具步骤'], ['--', '尝试次数'], ['--', '重试次数'], ['--', '工具成功率']]
     : [[`${metrics.elapsed_ms} ms`, '任务耗时'], [metrics.executed_steps, '工具步骤'], [metrics.attempts, '尝试次数'], [metrics.retry_count, '重试次数'], [`${Math.round((metrics.tool_success_rate || 0) * 100)}%`, '工具成功率']];
   metricHost.innerHTML = metricItems.map(([value, label]) => `<div class="metric"><strong>${escapeHtml(String(value))}</strong><small>${escapeHtml(label)}</small></div>`).join('');
+  renderDecisionPath(task, node);
   renderContextManifest(task.result?.context, node);
   const status = node.querySelector('.status');
   status.textContent = statusLabels[task.status] || task.status;
@@ -412,27 +776,45 @@ function renderTask(task) {
   renderExecutionFlow(task, node);
 
   const artifacts = task.result?.artifacts || {};
-  node.querySelector('.artifact.document').textContent = artifacts.weekly_report_markdown || '尚未生成项目周报。';
-  if (artifacts.risk_register_markdown) {
-    node.querySelector('.table-wrap').hidden = false;
-    renderRiskRegister(artifacts.risk_register_markdown, node.querySelector('.artifact.table'));
-  }
-  if (artifacts.slide_outline_markdown) {
-    node.querySelector('.slides-wrap').hidden = false;
-    node.querySelector('.artifact.slides').textContent = artifacts.slide_outline_markdown;
+  renderArtifacts(artifacts, node, false);
+  const citationToggle = node.querySelector('.citation-toggle');
+  citationToggle.addEventListener('change', () => renderArtifacts(artifacts, cardHost, citationToggle.checked));
+  const downloadButton = node.querySelector('.download-output');
+  const downloadStatus = node.querySelector('.download-status');
+  if (task.status === 'approved') {
+    downloadButton.disabled = false;
+    downloadButton.textContent = '下载完整产出包 (.md)';
+    downloadButton.addEventListener('click', () => downloadReport(task.id, downloadButton, downloadStatus));
+  } else {
+    downloadButton.title = '请先在“人工审核”页通过本次结果';
   }
 
   const verification = task.result?.verification || {};
+  const gateHost = node.querySelector('.verification-gates');
+  const verificationGates = [
+    ['引用存在性', verification.citation_check?.passed ?? verification.citation_coverage],
+    ['字段一致性', verification.field_consistency_check?.passed ?? verification.consistency_passed],
+    ['语义支持性', verification.semantic_support_check?.passed ?? verification.content_quality_passed],
+  ];
+  gateHost.replaceChildren(...verificationGates.map(([label, passed]) => {
+    const gate = document.createElement('article');
+    gate.className = `verification-gate ${passed === undefined ? 'unknown' : passed ? 'passed' : 'failed'}`;
+    gate.innerHTML = `<span>${passed === undefined ? '–' : passed ? '✓' : '!'}</span><div><strong>${escapeHtml(label)}</strong><small>${passed === undefined ? '历史任务未检查' : passed ? '通过' : '需要人工复核'}</small></div>`;
+    return gate;
+  }));
   const verificationResult = node.querySelector('.verification-result');
   const citationMessage = verification.passed
     ? `通过：发现 ${verification.reference_count || 0} 处引用，均可在当前工作区证据中追溯。`
     : `未通过：存在无法追溯的引用 ${verification.invalid_citations?.join('、') || '或未生成引用'}。`;
   const warnings = verification.warnings || [];
-  verificationResult.textContent = warnings.length
-    ? `${citationMessage} 需人工复核：${warnings.join('；')}`
-    : citationMessage;
+  const qualityMessage = verification.content_quality_passed === undefined
+    ? '内容质量：该历史任务未执行新版规则检查。'
+    : verification.content_quality_passed === false
+      ? `内容质量未通过：${warnings.join('；')}`
+      : '内容质量通过：负责人、日期、风险覆盖和汇报选材未发现规则异常。';
+  verificationResult.textContent = `${citationMessage} ${qualityMessage}`;
   verificationResult.classList.toggle('verification-failed', !verification.passed);
-  verificationResult.classList.toggle('verification-warning', verification.passed && warnings.length > 0);
+  verificationResult.classList.toggle('verification-warning', verification.passed && verification.content_quality_passed === false);
   const evidenceList = node.querySelector('.evidence-list');
   (task.result?.evidence || []).forEach((evidence) => {
     const item = document.createElement('div');
@@ -440,18 +822,28 @@ function renderTask(task) {
     item.innerHTML = `<strong>[${escapeHtml(evidence.id)}]</strong> ${escapeHtml(evidence.excerpt)}<small>${escapeHtml(evidence.source_location)}</small>`;
     evidenceList.append(item);
   });
+  const rawJson = node.querySelector('.raw-json');
+  const copyRunJson = node.querySelector('.copy-run-json');
+  const copyRunStatus = node.querySelector('.copy-run-status');
+  rawJson.textContent = JSON.stringify(task.result || {}, null, 2);
+  copyRunJson.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(rawJson.textContent);
+      copyRunStatus.textContent = '已复制完整 JSON';
+    } catch (_) {
+      copyRunStatus.textContent = '复制失败，请手动选择文本';
+    }
+  });
 
   const review = node.querySelector('.review');
   const reviewNote = node.querySelector('.review-note');
-  const exportButton = node.querySelector('.export');
   const exportMessage = node.querySelector('.export-message');
   const reviewMessage = node.querySelector('.review-message');
   if (task.status === 'approved') {
     review.querySelector('textarea').hidden = true;
     review.querySelector('.approve').hidden = true;
     review.querySelector('.reject').hidden = true;
-    exportButton.hidden = false;
-    exportButton.addEventListener('click', () => downloadReport(task.id, exportButton, exportMessage));
+    exportMessage.textContent = '审核已通过，请在“结果”页顶部下载完整产出包。';
   } else if (task.status === 'rejected') {
     review.innerHTML = `<h3>审核结果</h3><p>已驳回：${escapeHtml(task.reviewer_note || '未填写备注')}</p>`;
   } else if (task.status === 'awaiting_review') {
@@ -488,6 +880,45 @@ async function retryTask(taskId, button, feedback) {
   }
 }
 
+function openDeleteDialog(task) {
+  pendingDeleteTask = task;
+  deleteDescription.textContent = `“${task.title}”（任务 #${task.id}）`;
+  deleteFeedback.textContent = '';
+  confirmDeleteButton.disabled = false;
+  confirmDeleteButton.textContent = '确认删除';
+  deleteDialog.hidden = false;
+  cancelDeleteButton.focus();
+}
+
+function closeDeleteDialog() {
+  if (confirmDeleteButton.disabled) return;
+  deleteDialog.hidden = true;
+  pendingDeleteTask = null;
+  deleteFeedback.textContent = '';
+}
+
+async function confirmDeleteTask() {
+  if (!pendingDeleteTask) return;
+  const task = pendingDeleteTask;
+  confirmDeleteButton.disabled = true;
+  cancelDeleteButton.disabled = true;
+  confirmDeleteButton.textContent = '正在删除…';
+  deleteFeedback.textContent = '';
+  try {
+    await request(`/api/docflow/tasks/${task.id}`, { method: 'DELETE' });
+    if (activeTaskId === task.id) resetWorkspace();
+    deleteDialog.hidden = true;
+    pendingDeleteTask = null;
+    await loadTasks();
+  } catch (error) {
+    deleteFeedback.textContent = `删除失败：${error.message}`;
+  } finally {
+    confirmDeleteButton.disabled = false;
+    cancelDeleteButton.disabled = false;
+    confirmDeleteButton.textContent = '确认删除';
+  }
+}
+
 async function loadTasks() {
   const tasks = await (await request('/api/docflow/tasks')).json();
   const sidebarTasks = tasks
@@ -495,20 +926,43 @@ async function loadTasks() {
     .slice(0, 6);
   taskList.replaceChildren(...sidebarTasks.map((task) => {
     const item = document.createElement('article');
+    const deleteDisabled = ['queued', 'running'].includes(task.status);
     item.className = `task ${task.id === activeTaskId ? 'active' : ''}`;
-    item.innerHTML = `<h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span></p>`;
-    item.addEventListener('click', async () => renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json()));
-    return item;
-  }));
-  historyList.replaceChildren(...tasks.map((task) => {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'history-item';
-    item.innerHTML = `<span><strong>${escapeHtml(task.title)}</strong><small>任务 #${escapeHtml(String(task.id))}</small></span><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span><b>查看详情 →</b>`;
-    item.addEventListener('click', async () => {
+    item.innerHTML = `<div class="task-main"><h3>${escapeHtml(task.title)}</h3><p><span class="task-status">${escapeHtml(statusLabels[task.status] || task.status)}</span></p></div><button class="task-menu-trigger" type="button" aria-label="更多操作：${escapeHtml(task.title)}" title="${deleteDisabled ? '任务完成后可操作' : '更多操作'}" ${deleteDisabled ? 'disabled' : ''}>•••</button>`;
+    if (!deleteDisabled) {
+      item.querySelector('.task-menu-trigger').addEventListener('click', (event) => {
+        event.stopPropagation();
+        openTaskMenuFromButton(task, event.currentTarget);
+      });
+    }
+    item.addEventListener('click', async (event) => {
+      if (event.target.closest('.task-menu-trigger')) return;
       renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json());
       activateMainView('workspace-view');
       document.querySelector('#detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    item.addEventListener('contextmenu', (event) => {
+      if (deleteDisabled) return;
+      event.preventDefault();
+      openTaskContextMenu(task, event.clientX, event.clientY);
+    });
+    return item;
+  }));
+  historyList.replaceChildren(...tasks.map((task) => {
+    const item = document.createElement('article');
+    const deleteDisabled = ['queued', 'running'].includes(task.status);
+    item.className = 'history-row';
+    item.innerHTML = `<button class="history-item history-open" type="button"><span><strong>${escapeHtml(task.title)}</strong><small>任务 #${escapeHtml(String(task.id))}</small></span><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span><b>查看详情 →</b></button><button class="history-menu-trigger" type="button" aria-label="更多操作：${escapeHtml(task.title)}" ${deleteDisabled ? 'disabled title="任务完成后可操作"' : 'title="更多操作"'}>•••</button>`;
+    item.querySelector('.history-open').addEventListener('click', async () => {
+      renderTask(await (await request(`/api/docflow/tasks/${task.id}`)).json());
+      activateMainView('workspace-view');
+      document.querySelector('#detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    if (!deleteDisabled) item.querySelector('.history-menu-trigger').addEventListener('click', (event) => openTaskMenuFromButton(task, event.currentTarget));
+    item.addEventListener('contextmenu', (event) => {
+      if (deleteDisabled) return;
+      event.preventDefault();
+      openTaskContextMenu(task, event.clientX, event.clientY);
     });
     return item;
   }));
@@ -531,17 +985,25 @@ async function reviewTask(taskId, action, note, button, feedback) {
   }
 }
 
-function downloadReport(taskId, button, output) {
+async function downloadReport(taskId, button, output) {
   button.disabled = true;
   output.textContent = '正在生成下载文件…';
-  const anchor = document.createElement('a');
-  anchor.href = `/api/docflow/tasks/${taskId}/export`;
-  anchor.download = `docflow-${taskId}.md`;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  output.textContent = '已开始下载 Markdown 文档。';
-  button.disabled = false;
+  try {
+    const response = await request(`/api/docflow/tasks/${taskId}/export`);
+    const blob = await response.blob();
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `docflow-${taskId}.md`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(anchor.href);
+    output.textContent = '已开始下载 Markdown 文档。';
+  } catch (error) {
+    output.textContent = `下载失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 form.addEventListener('submit', async (event) => {
@@ -551,7 +1013,7 @@ form.addEventListener('submit', async (event) => {
   const title = document.querySelector('#title').value;
   const goal = document.querySelector('#goal').value;
   const text = document.querySelector('#text').value;
-  const sessionId = document.querySelector('#session-id').value.trim() || 'default';
+  const sessionId = getActiveSessionId();
   const runMode = document.querySelector('#run-mode').value;
   const memory = document.querySelector('#memory').value.trim();
   const contextConfig = {
@@ -565,6 +1027,9 @@ form.addEventListener('submit', async (event) => {
   const idempotencyKey = window.crypto?.randomUUID?.() || `docflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   submit.disabled = true;
   setWorkspaceMode('active');
+  cardHost.replaceChildren();
+  cardHost.hidden = true;
+  emptyState.hidden = false;
   submit.textContent = runMode === 'async' ? '正在提交后台任务…' : 'Planner 正在生成计划…';
   jobProgress.hidden = true;
   try {
@@ -575,6 +1040,7 @@ form.addEventListener('submit', async (event) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, memory_key: '协作偏好', content: memory }),
       });
+      await loadMemoriesForSession();
     }
     let response;
     if (selectedFile) {
@@ -606,6 +1072,7 @@ form.addEventListener('submit', async (event) => {
     const task = runMode === 'async' ? await pollJob(submitted.task_id) : submitted;
     renderTask(task);
     await loadTasks();
+    document.querySelector('#detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     message.textContent = error.message;
   } finally {
@@ -614,8 +1081,59 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
-sampleButton.addEventListener('click', () => loadDemoExample('weekly'));
 exampleTasks.forEach((button) => button.addEventListener('click', () => loadDemoExample(button.dataset.example)));
+openTemplateManagerButton.addEventListener('click', openTemplateManager);
+closeTemplateManagerButton.addEventListener('click', () => {
+  resetWorkspace();
+  activateMainView('workspace-view');
+});
+templateForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = templateForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  templateFormMessage.textContent = '正在保存…';
+  try {
+    const template = await (await request('/api/docflow/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: document.querySelector('#template-name').value,
+        title: document.querySelector('#template-title').value,
+        goal: document.querySelector('#template-goal').value,
+        source_text: document.querySelector('#template-source').value,
+        audience: document.querySelector('#template-audience').value,
+        focus: document.querySelector('#template-focus').value,
+      }),
+    })).json();
+    templateForm.reset();
+    templateFormMessage.textContent = `“${template.name}”已保存，可从侧边栏或右侧列表载入。`;
+    await loadCustomTemplates();
+  } catch (error) {
+    templateFormMessage.textContent = `保存失败：${error.message}`;
+  } finally {
+    submit.disabled = false;
+  }
+});
+menuDeleteTaskButton.addEventListener('click', () => {
+  if (!contextMenuTask) return;
+  const task = contextMenuTask;
+  closeTaskContextMenu();
+  openDeleteDialog(task);
+});
+cancelDeleteButton.addEventListener('click', closeDeleteDialog);
+confirmDeleteButton.addEventListener('click', confirmDeleteTask);
+deleteDialog.addEventListener('click', (event) => {
+  if (event.target === deleteDialog) closeDeleteDialog();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !deleteDialog.hidden) closeDeleteDialog();
+  else if (event.key === 'Escape' && !taskContextMenu.hidden) closeTaskContextMenu();
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!taskContextMenu.hidden && !event.target.closest('#task-context-menu') && !event.target.closest('.task-menu-trigger, .history-menu-trigger')) closeTaskContextMenu();
+});
+window.addEventListener('resize', closeTaskContextMenu);
+window.addEventListener('scroll', closeTaskContextMenu, true);
 
 refreshEvaluationButton.addEventListener('click', async () => {
   const originalText = refreshEvaluationButton.textContent;
@@ -628,5 +1146,38 @@ refreshEvaluationButton.addEventListener('click', async () => {
     refreshEvaluationButton.textContent = originalText;
   }
 });
+refreshMemoriesButton.addEventListener('click', loadMemoriesForSession);
+async function refreshSessionScopedView() {
+  getActiveSessionId();
+  activeTaskId = null;
+  cardHost.replaceChildren();
+  cardHost.hidden = true;
+  emptyState.hidden = false;
+  await Promise.all([loadMemoriesForSession(), loadTasks()]);
+}
+
+const sessionInput = document.querySelector('#session-id');
+sessionInput.addEventListener('input', () => {
+  activeTaskId = null;
+  cardHost.replaceChildren();
+  cardHost.hidden = true;
+  emptyState.hidden = false;
+  taskList.replaceChildren();
+  memoryList.innerHTML = '<p class="memory-empty">正在切换访客会话…</p>';
+  clearTimeout(sessionRefreshTimer);
+  const candidate = sessionInput.value.trim();
+  if (VISITOR_SESSION_PATTERN.test(candidate) && candidate !== 'default') {
+    sessionRefreshTimer = setTimeout(() => refreshSessionScopedView(), 250);
+  }
+});
+sessionInput.addEventListener('change', () => {
+  clearTimeout(sessionRefreshTimer);
+  refreshSessionScopedView();
+});
+document.querySelector('.advanced-settings').addEventListener('toggle', (event) => {
+  if (event.currentTarget.open) loadMemoriesForSession();
+});
 
 loadTasks().catch((error) => { taskList.textContent = error.message; });
+loadCustomTemplates().catch((error) => { templateLibraryList.textContent = `模板加载失败：${error.message}`; });
+loadRuntimeStatus();

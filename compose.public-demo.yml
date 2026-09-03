@@ -5,13 +5,17 @@ services:
     container_name: docflow-demo
     restart: unless-stopped
     ports:
-      - "8010:8010"
+      - "${DOCFLOW_BIND_ADDRESS:-127.0.0.1}:${DOCFLOW_PORT:-8010}:8010"
     environment:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.deepseek.com/v1}
       MODEL_NAME: ${MODEL_NAME:-deepseek-chat}
       DOCFLOW_MAX_WORKERS: ${DOCFLOW_MAX_WORKERS:-2}
       DOCFLOW_MAX_PENDING: ${DOCFLOW_MAX_PENDING:-20}
+      DOCFLOW_DEMO_MODE: ${DOCFLOW_DEMO_MODE:-true}
+      DOCFLOW_DEMO_USERNAME: ${DOCFLOW_DEMO_USERNAME:?DOCFLOW_DEMO_USERNAME is required}
+      DOCFLOW_DEMO_PASSWORD: ${DOCFLOW_DEMO_PASSWORD:?DOCFLOW_DEMO_PASSWORD is required}
+      DOCFLOW_RATE_LIMIT_PER_MINUTE: ${DOCFLOW_RATE_LIMIT_PER_MINUTE:-60}
     volumes:
       - docflow_data:/app/data
     mem_limit: 640m

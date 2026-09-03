@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import hmac
 import json
 import logging
 import re
+import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
@@ -15,18 +20,20 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from .analysis import analyze
-from .config import load_runtime_config
+from .config import load_demo_security_config, load_runtime_config
 from .docflow import AgentRuntime
 from .docflow_repository import DocflowRepository
 from .document_text import extract_uploaded_text
 from .job_coordinator import JobCoordinator, QueueCapacityError
 from .observability import configure_event_logger, log_event
+from .planning import PlanValidationError, validate_goal_capabilities
 from .repository import TaskRepository
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 load_dotenv(ROOT / ".env")
 runtime_config = load_runtime_config()
+demo_security = load_demo_security_config()
 event_logger = configure_event_logger()
 repository = TaskRepository(ROOT / "data" / "research.db")
 docflow_repository = DocflowRepository(ROOT / "data" / "research.db")
@@ -38,6 +45,60 @@ job_coordinator = JobCoordinator(
 
 app = FastAPI(title="AI 产业研究助手", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+_demo_rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+_demo_rate_lock = threading.Lock()
+
+
+def _valid_demo_authorization(value: str) -> bool:
+    if not demo_security.authentication_enabled:
+        return True
+    scheme, _, encoded = value.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, separator, password = decoded.partition(":")
+    return bool(separator) and hmac.compare_digest(username, demo_security.username) and hmac.compare_digest(
+        password, demo_security.password
+    )
+
+
+def _demo_rate_limit_exceeded(client_key: str, now: float) -> bool:
+    if not demo_security.demo_mode:
+        return False
+    cutoff = now - 60
+    with _demo_rate_lock:
+        bucket = _demo_rate_buckets[client_key]
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if len(bucket) >= demo_security.rate_limit_per_minute:
+            return True
+        bucket.append(now)
+        return False
+
+
+@app.middleware("http")
+async def public_demo_security(request: Request, call_next):
+    if request.url.path in {"/health", "/ready"}:
+        return await call_next(request)
+    if not _valid_demo_authorization(request.headers.get("Authorization", "")):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "需要输入演示访问用户名和密码。"},
+            headers={"WWW-Authenticate": 'Basic realm="DocFlow Demo", charset="UTF-8"'},
+        )
+    if request.url.path.startswith("/api/"):
+        client_key = request.client.host if request.client else "unknown"
+        if _demo_rate_limit_exceeded(client_key, time.monotonic()):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "演示请求过于频繁，请稍后再试。"},
+                headers={"Retry-After": "60"},
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -96,14 +157,63 @@ class DocflowTaskRequest(BaseModel):
     title: str = Field(default="未命名协作任务", max_length=100)
     goal: str = Field(min_length=5, max_length=1000)
     text: str = Field(min_length=20, max_length=60000)
-    session_id: str = Field(default="default", min_length=1, max_length=100)
+    session_id: str = Field(min_length=8, max_length=100)
     context_config: ContextConfigRequest = Field(default_factory=ContextConfigRequest)
 
 
 class MemoryRequest(BaseModel):
-    session_id: str = Field(default="default", min_length=1, max_length=100)
+    session_id: str = Field(min_length=8, max_length=100)
     memory_key: str = Field(min_length=2, max_length=100)
     content: str = Field(min_length=2, max_length=1000)
+
+
+class MemoryUpdateRequest(BaseModel):
+    memory_key: str | None = Field(default=None, min_length=2, max_length=100)
+    content: str | None = Field(default=None, min_length=2, max_length=1000)
+    enabled: bool | None = None
+
+
+class TemplateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=50)
+    title: str = Field(min_length=2, max_length=100)
+    goal: str = Field(min_length=5, max_length=1000)
+    source_text: str = Field(min_length=20, max_length=60000)
+    audience: str = Field(default="项目团队", min_length=2, max_length=100)
+    focus: str = Field(default="balanced", pattern="^(balanced|risk|progress|actions)$")
+
+
+VISITOR_SESSION_PATTERN = re.compile(r"[A-Za-z0-9._:-]{8,100}")
+
+
+def _access_session(value: str | None) -> str:
+    session_id = (value or "").strip()
+    if not VISITOR_SESSION_PATTERN.fullmatch(session_id) or session_id == "default":
+        raise HTTPException(status_code=401, detail="缺少有效的浏览器会话标识，请刷新页面后重试。")
+    return session_id
+
+
+def _assert_session_owner(resource_session: str, access_session: str) -> None:
+    if resource_session != access_session:
+        # Do not reveal whether a task or Memory exists in another visitor session.
+        raise HTTPException(status_code=404, detail="协作资源不存在")
+
+
+def _owned_docflow_task(task_id: int, access_session: str) -> dict:
+    try:
+        task = docflow_repository.get_task(task_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="协作任务不存在") from error
+    _assert_session_owner(task["session_id"], access_session)
+    return task
+
+
+def _owned_docflow_memory(memory_id: int, access_session: str) -> dict:
+    try:
+        memory = docflow_repository.get_memory(memory_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Session Memory 不存在") from error
+    _assert_session_owner(memory["session_id"], access_session)
+    return memory
 
 
 @app.get("/", include_in_schema=False)
@@ -195,7 +305,13 @@ def export_task(task_id: int) -> PlainTextResponse:
 
 
 @app.post("/api/docflow/tasks", status_code=201)
-def create_docflow_task(payload: DocflowTaskRequest, request: Request) -> dict:
+def create_docflow_task(
+    payload: DocflowTaskRequest,
+    request: Request,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    access_session = _access_session(x_docflow_session)
+    _assert_session_owner(payload.session_id.strip(), access_session)
     return _run_docflow_task(
         payload.title,
         payload.goal,
@@ -210,14 +326,29 @@ def _run_docflow_task(
     title_value: str,
     goal_value: str,
     text: str,
-    session_id: str = "default",
+    session_id: str,
     context_config: dict | None = None,
     request_id: str = "",
 ) -> dict:
     title = title_value.strip() or "未命名协作任务"
     goal = goal_value.strip()
-    task = docflow_repository.create_task(title, goal, text, session_id.strip() or "default", context_config)
+    _validate_docflow_capabilities(goal)
+    task = docflow_repository.create_task(title, goal, text, session_id.strip(), context_config)
     return _execute_docflow_task(task, request_id=request_id)
+
+
+def _validate_docflow_capabilities(goal: str) -> None:
+    try:
+        validate_goal_capabilities(goal, set(docflow_runtime.registry.names()))
+    except PlanValidationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "unsupported_capability",
+                "message": str(error),
+                "available_tools": docflow_runtime.registry.names(),
+            },
+        ) from error
 
 
 def _execute_docflow_task(task: dict, resume: dict | None = None, request_id: str = "") -> dict:
@@ -292,6 +423,7 @@ def _create_job_task(
     context_config: dict,
     idempotency_key: str | None,
 ) -> tuple[dict, bool]:
+    _validate_docflow_capabilities(goal)
     if not idempotency_key:
         return docflow_repository.create_task(title, goal, text, session_id, context_config), True
     normalized_key = idempotency_key.strip()
@@ -344,10 +476,13 @@ def create_docflow_job(
     payload: DocflowTaskRequest,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
 ) -> dict:
     title = payload.title.strip() or "未命名协作任务"
     goal = payload.goal.strip()
-    session_id = payload.session_id.strip() or "default"
+    session_id = payload.session_id.strip()
+    access_session = _access_session(x_docflow_session)
+    _assert_session_owner(session_id, access_session)
     context_config = payload.context_config.model_dump()
     task, created = _create_job_task(
         title,
@@ -366,12 +501,13 @@ async def create_docflow_task_from_file(
     file: UploadFile = File(...),
     title: str = Form(default="未命名协作任务"),
     goal: str = Form(...),
-    session_id: str = Form(default="default"),
+    session_id: str = Form(default=""),
     audience: str = Form(default="项目团队"),
     focus: str = Form(default="balanced"),
     evidence_limit: int = Form(default=12),
     memory_enabled: bool = Form(default=True),
     citation_policy: str = Form(default="strict"),
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
 ) -> dict:
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
@@ -390,11 +526,14 @@ async def create_docflow_task_from_file(
         memory_enabled=memory_enabled,
         citation_policy=citation_policy,
     ).model_dump()
+    access_session = _access_session(x_docflow_session)
+    normalized_session = session_id.strip() or access_session
+    _assert_session_owner(normalized_session, access_session)
     return _run_docflow_task(
         title.strip() or fallback_title,
         goal,
         text,
-        session_id,
+        normalized_session,
         context_config,
         request_id=request.state.request_id,
     )
@@ -406,13 +545,14 @@ async def create_docflow_job_from_file(
     file: UploadFile = File(...),
     title: str = Form(default="未命名协作任务"),
     goal: str = Form(...),
-    session_id: str = Form(default="default"),
+    session_id: str = Form(default=""),
     audience: str = Form(default="项目团队"),
     focus: str = Form(default="balanced"),
     evidence_limit: int = Form(default=12),
     memory_enabled: bool = Form(default=True),
     citation_policy: str = Form(default="strict"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
 ) -> dict:
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
@@ -433,7 +573,9 @@ async def create_docflow_job_from_file(
     ).model_dump()
     normalized_title = title.strip() or fallback_title
     normalized_goal = goal.strip()
-    normalized_session = session_id.strip() or "default"
+    access_session = _access_session(x_docflow_session)
+    normalized_session = session_id.strip() or access_session
+    _assert_session_owner(normalized_session, access_session)
     task, created = _create_job_task(
         normalized_title,
         normalized_goal,
@@ -446,35 +588,56 @@ async def create_docflow_job_from_file(
 
 
 @app.get("/api/docflow/jobs/{task_id}")
-def get_docflow_job(task_id: int) -> dict:
-    try:
-        status = docflow_repository.job_status(task_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail="协作任务不存在") from error
+def get_docflow_job(
+    task_id: int,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    access_session = _access_session(x_docflow_session)
+    _owned_docflow_task(task_id, access_session)
+    status = docflow_repository.job_status(task_id)
     status["queue"] = job_coordinator.snapshot(task_id)
     status["task_url"] = f"/api/docflow/tasks/{task_id}" if status["terminal"] else None
     return status
 
 
 @app.get("/api/docflow/tasks")
-def list_docflow_tasks() -> list[dict]:
-    return docflow_repository.list_tasks()
+def list_docflow_tasks(
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> list[dict]:
+    return docflow_repository.list_tasks(_access_session(x_docflow_session))
 
 
 @app.get("/api/docflow/tasks/{task_id}")
-def get_docflow_task(task_id: int) -> dict:
+def get_docflow_task(
+    task_id: int,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    return _owned_docflow_task(task_id, _access_session(x_docflow_session))
+
+
+@app.delete("/api/docflow/tasks/{task_id}")
+def delete_docflow_task(
+    task_id: int,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    _owned_docflow_task(task_id, _access_session(x_docflow_session))
+    if job_coordinator.snapshot(task_id).get("task_state") is not None:
+        raise HTTPException(status_code=409, detail="任务仍在排队或运行，完成后才能删除。")
     try:
-        return docflow_repository.get_task(task_id)
+        return docflow_repository.delete_task(task_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="协作任务不存在") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/api/docflow/tasks/{task_id}/retry")
-def retry_docflow_task(task_id: int, request: Request) -> dict:
-    try:
-        task = docflow_repository.get_task(task_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail="协作任务不存在") from error
+def retry_docflow_task(
+    task_id: int,
+    request: Request,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    task = _owned_docflow_task(task_id, _access_session(x_docflow_session))
     resume = docflow_repository.latest_failed_checkpoint(task_id)
     if task["status"] != "failed" or resume is None:
         raise HTTPException(status_code=409, detail="当前任务没有可恢复的失败检查点")
@@ -482,26 +645,90 @@ def retry_docflow_task(task_id: int, request: Request) -> dict:
 
 
 @app.post("/api/docflow/memories", status_code=201)
-def add_docflow_memory(request: MemoryRequest) -> dict:
+def add_docflow_memory(
+    request: MemoryRequest,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    access_session = _access_session(x_docflow_session)
+    _assert_session_owner(request.session_id.strip(), access_session)
     return docflow_repository.add_memory(
-        request.session_id.strip() or "default",
+        request.session_id.strip(),
         request.memory_key.strip(),
         request.content.strip(),
     )
 
 
 @app.get("/api/docflow/memories/{session_id}")
-def list_docflow_memories(session_id: str) -> list[dict]:
-    return docflow_repository.list_memories(session_id)
+def list_docflow_memories(
+    session_id: str,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> list[dict]:
+    access_session = _access_session(x_docflow_session)
+    _assert_session_owner(session_id, access_session)
+    return docflow_repository.list_memories(access_session)
+
+
+@app.patch("/api/docflow/memories/{memory_id}")
+def update_docflow_memory(
+    memory_id: int,
+    request: MemoryUpdateRequest,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    _owned_docflow_memory(memory_id, _access_session(x_docflow_session))
+    try:
+        return docflow_repository.update_memory(
+            memory_id,
+            memory_key=request.memory_key.strip() if request.memory_key is not None else None,
+            content=request.content.strip() if request.content is not None else None,
+            enabled=request.enabled,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Session Memory 不存在") from error
+
+
+@app.delete("/api/docflow/memories/{memory_id}")
+def delete_docflow_memory(
+    memory_id: int,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    _owned_docflow_memory(memory_id, _access_session(x_docflow_session))
+    try:
+        return docflow_repository.delete_memory(memory_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Session Memory 不存在") from error
+
+
+@app.get("/api/docflow/templates")
+def list_docflow_templates() -> list[dict]:
+    return docflow_repository.list_templates()
+
+
+@app.post("/api/docflow/templates", status_code=201)
+def create_docflow_template(request: TemplateRequest) -> dict:
+    return docflow_repository.create_template(
+        request.name.strip(),
+        request.title.strip(),
+        request.goal.strip(),
+        request.source_text.strip(),
+        request.audience.strip(),
+        request.focus,
+    )
 
 
 @app.get("/api/docflow/evaluations/summary")
-def get_docflow_evaluation_summary() -> dict:
-    return docflow_repository.evaluation_summary()
+def get_docflow_evaluation_summary(
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    return docflow_repository.evaluation_summary(session_id=_access_session(x_docflow_session))
 
 
 @app.post("/api/docflow/tasks/{task_id}/review")
-def review_docflow_task(task_id: int, request: ReviewRequest) -> dict:
+def review_docflow_task(
+    task_id: int,
+    request: ReviewRequest,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> dict:
+    _owned_docflow_task(task_id, _access_session(x_docflow_session))
     try:
         return docflow_repository.review_task(task_id, request.action, request.note)
     except KeyError as error:
@@ -509,11 +736,11 @@ def review_docflow_task(task_id: int, request: ReviewRequest) -> dict:
 
 
 @app.get("/api/docflow/tasks/{task_id}/export")
-def export_docflow_task(task_id: int) -> PlainTextResponse:
-    try:
-        task = docflow_repository.get_task(task_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail="协作任务不存在") from error
+def export_docflow_task(
+    task_id: int,
+    x_docflow_session: str | None = Header(default=None, alias="X-DocFlow-Session"),
+) -> PlainTextResponse:
+    task = _owned_docflow_task(task_id, _access_session(x_docflow_session))
     if task["status"] != "approved":
         raise HTTPException(status_code=409, detail="请先完成人工审核，再导出文档。")
     result = task["result"]
@@ -541,6 +768,7 @@ def readiness() -> JSONResponse:
     database = docflow_repository.operational_status()
     payload = {
         "status": "ready" if database["ok"] else "not_ready",
+        "service": {"ok": True, "name": "docflow"},
         "database": database,
         "queue": job_coordinator.snapshot(),
         "runtime": runtime_config.public_dict(),
@@ -549,6 +777,15 @@ def readiness() -> JSONResponse:
             "queued_jobs_durable": True,
             "running_jobs_resumable": False,
             "task_history_persisted": True,
+            "public_access_control": True,
+            "public_demo_safe": demo_security.public_demo_safe,
+            "visitor_session_scope": "browser_token",
+            "demo_data_only": True,
+            "production_authentication": False,
+            "demo_authentication": demo_security.authentication_enabled,
+            "demo_rate_limit_per_minute": (
+                demo_security.rate_limit_per_minute if demo_security.demo_mode else 0
+            ),
         },
     }
     return JSONResponse(status_code=200 if database["ok"] else 503, content=payload)
