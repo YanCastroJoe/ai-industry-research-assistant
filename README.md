@@ -113,9 +113,10 @@ flowchart TD
 - 合成检索故障在第 2 次尝试恢复。
 - 云端隔离实例与正式实例分别通过一次强制模型验收：Planner 和内容生成均返回提供方请求 ID、Token 与模型耗时，未发生规则降级；审核前导出受阻，审核通过后导出成功。
 - M3 诊断页按当前访客 Session 展示终态任务成功率、模型降级/重试率、总耗时与模型耗时 P50/P95、Planner/内容理解分阶段调用、Token 和计价覆盖；成本仅在完整配置费率时汇总，并保留费率标签与缓存命中/未命中口径。
+- M3 云端强制验收修复了 DeepSeek V4 默认长思考导致的超时：修复后两阶段 2/2 成功、0 降级、0 重试，共 1,984 Tokens；模型耗时 4.54 秒、Run 总耗时 4.723 秒，按官方峰值费率保守估算上限为 USD 0.00103253。
 - 公网入口未认证返回 HTTP 401，认证后首页与 `/ready` 均返回 HTTP 200。
 
-上述结果只代表当前固定合成回归集和云端受控配对验收，不代表生产准确率或 SLA；两条路径在工程硬门禁下打平，尚未采集真人盲评偏好和人工修改率。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md)、[真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md) 与 [M2 配对评测报告](evaluation/reports/docflow-model-rules-m2-2026-09-04.md)。
+上述结果只代表当前固定合成回归集和云端受控验收，不代表生产准确率或 SLA；两条路径在工程硬门禁下打平，尚未采集真人盲评偏好和人工修改率。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md)、[真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md)、[M2 配对评测报告](evaluation/reports/docflow-model-rules-m2-2026-09-04.md) 与 [M3 运行诊断报告](evaluation/reports/docflow-m3-runtime-diagnostics-2026-09-04.md)。
 
 ## 本地复现
 
