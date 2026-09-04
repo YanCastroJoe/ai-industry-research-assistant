@@ -203,6 +203,37 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertEqual(grounded["risks"][0]["risk"], "退款政策文档仍有两个版本")
         self.assertEqual(grounded["actions"][0]["content"], "王芳负责补充退货运费边界案例，下周二完成回归测试")
 
+    def test_grounding_preserves_two_owner_deadline_pairs_from_one_action_row(self):
+        facts = [{
+            "citation": "E2",
+            "claim": "行动：刘婷负责在9月10日前补齐权限矩阵，周浩负责9月11日前完成回归。",
+        }]
+        insights = {
+            "risks": [],
+            "actions": [
+                {
+                    "content": "补齐权限矩阵",
+                    "owner": "刘婷",
+                    "due": "9月10日前",
+                    "evidence_ids": ["E2"],
+                },
+                {
+                    "content": "完成回归",
+                    "owner": "周浩",
+                    "due": "9月10日前",
+                    "evidence_ids": ["E2"],
+                },
+            ],
+            "security_flags": [],
+        }
+
+        grounded = _enforce_grounded_fields(insights, facts)
+        owner_deadlines = {item["owner"]: item["due"] for item in grounded["actions"]}
+
+        self.assertEqual(owner_deadlines, {"刘婷": "9月10日前", "周浩": "9月11日前"})
+        self.assertIn("补齐权限矩阵", next(item["content"] for item in grounded["actions"] if item["owner"] == "刘婷"))
+        self.assertIn("完成回归", next(item["content"] for item in grounded["actions"] if item["owner"] == "周浩"))
+
     def test_unsupported_model_risk_is_removed_when_cited_fact_is_not_a_risk(self):
         facts = [
             {"citation": "E1", "claim": "风险：生产证书尚未签发，负责人赵磊需在9月8日前完成申请。"},

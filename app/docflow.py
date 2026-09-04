@@ -801,28 +801,42 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
         model_items = list(insights.get(collection, []))
         merged: list[dict[str, Any]] = []
         consumed: set[int] = set()
+
+        def same_entity(left: dict[str, Any], right: dict[str, Any]) -> bool:
+            left_owner = str(left.get("owner", ""))
+            right_owner = str(right.get("owner", ""))
+            if left_owner not in {"", "待确认"} and left_owner == right_owner:
+                return True
+            left_text = _compact_business_text(str(left.get(text_key, "")))
+            right_text = _compact_business_text(str(right.get(text_key, "")))
+            return bool(left_text and right_text) and (
+                left_text in right_text or right_text in left_text
+            )
+
         for required in canonical:
             required_citations = set(required.get("evidence_ids", []))
-            explicit = next(
-                (
-                    item for item in explicit_requirements
-                    if item["kind"] == ("risk" if collection == "risks" else "action")
-                    and item["citation"] in required_citations
-                ),
-                None,
-            )
+            explicit_candidates = [
+                item for item in explicit_requirements
+                if item["kind"] == ("risk" if collection == "risks" else "action")
+                and item["citation"] in required_citations
+            ]
+            explicit = next((item for item in explicit_candidates if same_entity(required, item)), None)
+            if explicit is None and len(explicit_candidates) == 1:
+                explicit = explicit_candidates[0]
+
+            candidate_indexes = [
+                index for index, item in enumerate(model_items)
+                if index not in consumed
+                and required_citations.intersection(item.get("evidence_ids", []))
+                and (
+                    collection == "actions"
+                    or not _risk_topic(item.get(text_key, ""))
+                    or _risk_topic(item.get(text_key, "")) == _risk_topic(required.get(text_key, ""))
+                )
+            ]
             candidate_index = next(
-                (
-                    index for index, item in enumerate(model_items)
-                    if index not in consumed
-                    and required_citations.intersection(item.get("evidence_ids", []))
-                    and (
-                        collection == "actions"
-                        or not _risk_topic(item.get(text_key, ""))
-                        or _risk_topic(item.get(text_key, "")) == _risk_topic(required.get(text_key, ""))
-                    )
-                ),
-                None,
+                (index for index in candidate_indexes if same_entity(required, model_items[index])),
+                candidate_indexes[0] if len(candidate_indexes) == 1 else None,
             )
             if candidate_index is None:
                 restored = dict(required)
@@ -1108,6 +1122,24 @@ def _explicit_source_requirements(evidence: list[dict[str, str]]) -> list[dict[s
             # verified through the conflict/proposal checks below.
             continue
         clauses = _fact_clauses(excerpt)
+        if label == "action":
+            # One labelled action row may contain several independently owned
+            # commitments. Preserve each owner/deadline pair instead of
+            # applying a whole-row pair to every action. Even a single action
+            # is parsed after removing its field label so the label cannot
+            # obscure a leading owner name.
+            for clause in clauses:
+                if _field_only_clause(clause):
+                    continue
+                owner, due = _extract_owner_due(clause)
+                requirements.append({
+                    "kind": label,
+                    "content": clause,
+                    "owner": owner,
+                    "due": due,
+                    "citation": item.get("id", ""),
+                })
+            continue
         owner, due = _extract_owner_due(excerpt)
         requirements.append({
             "kind": label,
@@ -1191,11 +1223,30 @@ def verify_citations(artifacts: dict[str, str], evidence: list[dict[str, str]]) 
                 line for line in action_section.splitlines()
                 if not citation or f"[{citation}]" in line
             ]
-            action_text = "\n".join(cited_action_lines)
-            if not cited_action_lines:
+            owner = requirement["owner"]
+            compact_content = _compact_business_text(content)
+            content_without_date = re.sub(DATE_PATTERN, "", content)
+            content_anchor = _compact_business_text(content_without_date)
+            matching_action_lines = [
+                line for line in cited_action_lines
+                if (
+                    owner != "待确认" and owner in line
+                ) or (
+                    compact_content
+                    and (
+                        compact_content in _compact_business_text(line)
+                        or _compact_business_text(line) in compact_content
+                    )
+                ) or (
+                    len(content_anchor) >= 4
+                    and content_anchor in _compact_business_text(line)
+                )
+            ]
+            action_text = "\n".join(matching_action_lines)
+            if not matching_action_lines:
                 semantic_warnings.append(f"原始材料中标注为“行动”的内容“{content}”未进入行动项。")
-            if requirement["owner"] != "待确认" and requirement["owner"] not in action_text:
-                field_warnings.append(f"显式行动“{content}”遗漏负责人“{requirement['owner']}”。")
+            if owner != "待确认" and owner not in action_text:
+                field_warnings.append(f"显式行动“{content}”遗漏负责人“{owner}”。")
             if requirement["due"] != "待确认" and requirement["due"] not in action_text:
                 field_warnings.append(f"显式行动“{content}”遗漏截止时间“{requirement['due']}”。")
     for fact in baseline_facts:
