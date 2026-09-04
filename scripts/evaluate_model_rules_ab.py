@@ -2,7 +2,7 @@
 
 The two arms use the same goal, source, Session Memory and context settings.
 Only MODEL_API_KEY availability changes, and the original environment is restored
-after every run. This is a small fixed-set regression, not production accuracy.
+after every run. This is a fixed-set regression, not production accuracy.
 """
 
 from __future__ import annotations
@@ -28,6 +28,15 @@ from app.docflow import AgentRuntime
 
 
 DEFAULT_CASES = ROOT / "evaluation" / "docflow_model_rules_ab_cases.json"
+M2_CASES = ROOT / "evaluation" / "docflow_model_rules_ab_cases_60.json"
+M2_CATEGORY_DISTRIBUTION = {
+    "fixed_regression": 20,
+    "colloquial_complex_date": 15,
+    "multi_risk_conflict": 10,
+    "prompt_injection": 5,
+    "insufficient_information": 5,
+    "long_noisy": 5,
+}
 SHARED_MEMORY = [
     {
         "id": "ab-shared-memory",
@@ -82,6 +91,45 @@ def _item_text(item: dict[str, Any], kind: str) -> str:
 
 def _without_whitespace(value: str) -> str:
     return "".join(value.split())
+
+
+def input_fingerprint(case: dict[str, Any]) -> str:
+    """Hash every controlled input so the two arms can prove input parity."""
+    payload = {
+        "goal": case["goal"],
+        "source": case["source"],
+        "memory": SHARED_MEMORY,
+        "context_config": CONTEXT_CONFIG,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def validate_cases(
+    cases: list[dict[str, Any]],
+    expected_distribution: dict[str, int] | None = None,
+) -> None:
+    if not cases:
+        raise EvaluationError("evaluation case set is empty")
+    ids = [str(case.get("id") or "") for case in cases]
+    if any(not case_id for case_id in ids):
+        raise EvaluationError("every case requires a non-empty id")
+    if len(ids) != len(set(ids)):
+        raise EvaluationError("evaluation case ids must be unique")
+    for case in cases:
+        for required in ("goal", "source", "bindings", "required_artifact_fragments"):
+            if required not in case:
+                raise EvaluationError(f"case {case['id']} is missing {required}")
+    if expected_distribution is not None:
+        observed = {
+            category: sum(case.get("category") == category for case in cases)
+            for category in expected_distribution
+        }
+        unknown = sorted({str(case.get("category")) for case in cases} - set(expected_distribution))
+        if observed != expected_distribution or unknown:
+            raise EvaluationError(
+                f"M2 category distribution mismatch: observed={observed}, unknown={unknown}"
+            )
 
 
 def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: str) -> dict[str, Any]:
@@ -147,18 +195,37 @@ def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: s
         for fragment in case.get("required_artifact_fragments", [])
     )
 
+    compact_source = _without_whitespace(str(case.get("source") or ""))
+    evidence_grounded = bool(evidence) and all(
+        _without_whitespace(str(item.get("excerpt") or "")) in compact_source
+        for item in evidence
+        if isinstance(item, dict)
+    )
+    forbidden_absent = all(
+        _without_whitespace(str(fragment)) not in compact_artifact
+        for fragment in case.get("forbidden_artifact_fragments", [])
+    )
+    risks = insights.get("risks") if isinstance(insights.get("risks"), list) else []
+    actions = insights.get("actions") if isinstance(insights.get("actions"), list) else []
+    security_flags = insights.get("security_flags") if isinstance(insights.get("security_flags"), list) else []
     dimensions = {
         "mode_valid": mode_valid,
         "verifier_overall": bool(verification.get("overall_passed") or verification.get("passed")),
         "content_quality": verification.get("content_quality_passed") is True,
         "citation_ids_valid": citation_ids_valid,
+        "evidence_grounded_in_source": evidence_grounded,
         "memory_applied": int(result.get("memory", {}).get("applied") or 0) == len(SHARED_MEMORY),
         "risk_first": risk_before_progress,
         "bindings_found": all(item["found"] for item in binding_checks),
         "owners_exact": all(item["owner_exact"] for item in binding_checks),
         "dates_exact": all(item["due_exact"] for item in binding_checks),
         "required_facts_preserved": required_facts_preserved,
+        "forbidden_content_absent": forbidden_absent,
+        "minimum_risks_covered": len(risks) >= int(case.get("min_risks") or 0),
+        "minimum_actions_covered": len(actions) >= int(case.get("min_actions") or 0),
     }
+    if case.get("requires_instruction_isolation"):
+        dimensions["instruction_isolated"] = bool(security_flags) and forbidden_absent
     passed_dimensions = sum(bool(value) for value in dimensions.values())
     return {
         "passed": passed_dimensions == len(dimensions),
@@ -190,7 +257,9 @@ def run_once(case: dict[str, Any], mode: str, repeat: int) -> dict[str, Any]:
     metrics = result["metrics"]
     return {
         "case_id": case["id"],
+        "category": case.get("category", "unspecified"),
         "repeat": repeat,
+        "input_fingerprint": input_fingerprint(case),
         "requested_mode": mode,
         "actual_planner_mode": execution.get("planner_mode"),
         "actual_content_mode": execution.get("content_mode"),
@@ -216,6 +285,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         latencies = [row["wall_ms"] for row in arm]
         model_latencies = [row["model_latency_ms"] for row in arm]
         costs = [row["estimated_cost"] for row in arm if row["estimated_cost"] is not None]
+        dimension_names = sorted({name for row in arm for name in row["score"].get("dimensions", {})})
         summary[mode] = {
             "runs": len(arm),
             "passed": sum(row["score"]["passed"] for row in arm),
@@ -236,42 +306,75 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "total_tokens": sum(int(row["tokens"].get("total_tokens") or 0) for row in arm),
             "estimated_cost_total": round(sum(float(value) for value in costs), 8) if len(costs) == len(arm) and arm else None,
             "cost_currency": next((row["cost_currency"] for row in arm if row["cost_currency"]), None),
+            "dimension_pass_rates": {
+                name: round(
+                    sum(bool(row["score"].get("dimensions", {}).get(name)) for row in arm if name in row["score"].get("dimensions", {}))
+                    / max(sum(name in row["score"].get("dimensions", {}) for row in arm), 1),
+                    4,
+                )
+                for name in dimension_names
+            },
         }
     return summary
 
 
-def evaluate(cases: list[dict[str, Any]], repeats: int) -> dict[str, Any]:
+def summarize_categories(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    categories: dict[str, Any] = {}
+    for category in sorted({row["category"] for row in rows}):
+        category_rows = [row for row in rows if row["category"] == category]
+        categories[category] = summarize(category_rows)
+    return categories
+
+
+def evaluate(
+    cases: list[dict[str, Any]],
+    repeats: int,
+    modes: tuple[str, ...] = ("model", "rules"),
+) -> dict[str, Any]:
     rows = []
     for repeat in range(1, repeats + 1):
         for case in cases:
-            # Paired order is stable and every input other than mode is reused verbatim.
-            rows.append(run_once(case, "model", repeat))
-            rows.append(run_once(case, "rules", repeat))
+            for mode in modes:
+                rows.append(run_once(case, mode, repeat))
 
     parity = []
-    for repeat in range(1, repeats + 1):
-        for case in cases:
-            pair = [row for row in rows if row["case_id"] == case["id"] and row["repeat"] == repeat]
-            model_row = next(row for row in pair if row["requested_mode"] == "model")
-            rules_row = next(row for row in pair if row["requested_mode"] == "rules")
-            parity.append(
-                {
-                    "case_id": case["id"],
-                    "repeat": repeat,
-                    "same_evidence": model_row["score"]["evidence_signature"] == rules_row["score"]["evidence_signature"],
-                    "different_artifacts": model_row["score"]["artifact_signature"] != rules_row["score"]["artifact_signature"],
-                }
-            )
+    if set(modes) == {"model", "rules"}:
+        for repeat in range(1, repeats + 1):
+            for case in cases:
+                pair = [row for row in rows if row["case_id"] == case["id"] and row["repeat"] == repeat]
+                model_row = next(row for row in pair if row["requested_mode"] == "model")
+                rules_row = next(row for row in pair if row["requested_mode"] == "rules")
+                parity.append(
+                    {
+                        "case_id": case["id"],
+                        "repeat": repeat,
+                        "same_input_fingerprint": model_row["input_fingerprint"] == rules_row["input_fingerprint"],
+                        "same_evidence": model_row["score"]["evidence_signature"] == rules_row["score"]["evidence_signature"],
+                        "different_artifacts": model_row["score"]["artifact_signature"] != rules_row["score"]["artifact_signature"],
+                        "gate_score_delta_model_minus_rules": round(
+                            model_row["score"]["gate_score"] - rules_row["score"]["gate_score"], 2
+                        ),
+                    }
+                )
 
     summary = summarize(rows)
-    paired_inputs_preserved = all(item["same_evidence"] for item in parity)
-    overall_passed = (
-        paired_inputs_preserved
-        and summary["model"]["passed"] == summary["model"]["runs"]
-        and summary["rules"]["passed"] == summary["rules"]["runs"]
+    paired_inputs_preserved = bool(parity) and all(
+        item["same_input_fingerprint"] and item["same_evidence"] for item in parity
     )
+    overall_passed = all(summary[mode]["passed"] == summary[mode]["runs"] for mode in modes)
+    if parity:
+        overall_passed = overall_passed and paired_inputs_preserved
+    paired_comparison = None
+    if parity:
+        paired_comparison = {
+            "model_wins": sum(item["gate_score_delta_model_minus_rules"] > 0 for item in parity),
+            "ties": sum(item["gate_score_delta_model_minus_rules"] == 0 for item in parity),
+            "rules_wins": sum(item["gate_score_delta_model_minus_rules"] < 0 for item in parity),
+            "human_blind_preference": "not_collected",
+            "human_review_modification_rate": "not_collected",
+        }
     return {
-        "schema_version": "docflow_model_rules_ab_v1",
+        "schema_version": "docflow_model_rules_ab_v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scope": "small_fixed_set_regression_not_production_accuracy_or_sla",
         "controlled_variables": {
@@ -281,12 +384,19 @@ def evaluate(cases: list[dict[str, Any]], repeats: int) -> dict[str, Any]:
             "context_config": CONTEXT_CONFIG,
         },
         "case_count": len(cases),
+        "category_distribution": {
+            category: sum(case.get("category", "unspecified") == category for case in cases)
+            for category in sorted({case.get("category", "unspecified") for case in cases})
+        },
         "repeats": repeats,
+        "modes": list(modes),
         "pair_count": len(parity),
         "paired_inputs_preserved": paired_inputs_preserved,
         "distinct_output_pairs": sum(item["different_artifacts"] for item in parity),
         "evidence_parity": parity,
         "summary": summary,
+        "summary_by_category": summarize_categories(rows),
+        "paired_comparison": paired_comparison,
         "runs": rows,
         "overall_passed": overall_passed,
     }
@@ -296,6 +406,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Controlled DocFlow model-vs-rules A/B evaluation")
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--mode", choices=("paired", "model", "rules"), default="paired")
+    parser.add_argument("--require-m2-suite", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.repeats < 1 or args.repeats > 10:
@@ -306,7 +418,9 @@ def main() -> int:
 
     load_dotenv(ROOT / ".env", override=False)
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
-    report = evaluate(cases, args.repeats)
+    validate_cases(cases, M2_CATEGORY_DISTRIBUTION if args.require_m2_suite else None)
+    modes = ("model", "rules") if args.mode == "paired" else (args.mode,)
+    report = evaluate(cases, args.repeats, modes)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -314,6 +428,7 @@ def main() -> int:
         "schema_version": report["schema_version"],
         "case_count": report["case_count"],
         "repeats": report["repeats"],
+        "modes": report["modes"],
         "paired_inputs_preserved": report["paired_inputs_preserved"],
         "summary": report["summary"],
         "overall_passed": report["overall_passed"],

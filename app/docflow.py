@@ -277,6 +277,7 @@ def _citation_ids(value: Any) -> list[str]:
 RISK_WORDS = (
     "风险", "尚未", "未完成", "未通过", "未审批", "待确认", "可能", "延期", "不一致", "冲突",
     "缺失", "阻塞", "超时", "失败", "异常", "不稳定", "旧版本", "未开放", "未提交", "没过", "没批下来",
+    "还没", "对不上", "不知道归哪类", "时好时坏", "搜不到", "答偏", "误报", "点不开",
 )
 ACTION_WORDS = ("计划", "将", "需", "负责", "补充", "提交", "调整", "统一", "推进", "跟进", "修复", "验证", "测试")
 MILESTONE_WORDS = ("正式上线", "上线", "发布", "验收", "交付", "里程碑", "目标")
@@ -363,7 +364,7 @@ def _fact_clauses(value: str) -> list[str]:
 
 
 def _extract_owner_due(text: str) -> tuple[str, str]:
-    due_match = re.search(rf"(?:修复截止|完成截止|截止时间|截止)[：:]\s*(?P<due>{DATE_PATTERN})", text)
+    due_match = re.search(rf"(?:修复截止|完成截止|截止时间|截止)[：:]?\s*(?:为)?\s*(?P<due>{DATE_PATTERN})", text)
     if not due_match:
         due_match = re.search(
             rf"(?:得|要|需要|需|应|计划|将)(?:于|在)?\s*(?P<due>{DATE_PATTERN})(?=\s*(?:处理|完成|提交|交|修复|跟进|确认|交付))",
@@ -373,6 +374,14 @@ def _extract_owner_due(text: str) -> tuple[str, str]:
         due_match = re.search(rf"(?P<due>{DATE_PATTERN})(?=\s*(?:前|之前)?(?:完成|提交|处理|修复|交付|确认|补充|统一|调整|测试))", text)
     if not due_match:
         due_match = re.search(rf"(?:最晚)?\s*(?P<due>{DATE_PATTERN})(?=\s*由[\u4e00-\u9fff]{{2,6}}(?:完成|提交|处理|修复|交付|确认|跟进|验证|测试))", text)
+    if not due_match and re.search(
+        r"负责人|责任人|负责|(?:得|要|需要|需|应)(?:于|在)?|计划|截止|完成|提交|处理|修复|交付|确认|补充|统一|调整|测试|验证|演练|复核|培训|整理|跟进|申请|执行",
+        text,
+    ):
+        # Business notes use many verbs (演练、发布、复核等). Once a complete
+        # date token exists, keeping it is safer than silently replacing it
+        # with “待确认”; downstream field grounding still checks the citation.
+        due_match = re.search(rf"(?P<due>{DATE_PATTERN})", text)
     due = re.sub(r"\s+", "", due_match.group("due")) if due_match else "待确认"
     owner_match = re.search(
         r"(?:负责人|责任人)\s*[：:]?\s*(?P<owner>[\u4e00-\u9fff]{2,6}?)(?=(?:需|应|负责|计划|将|于|在|，|,|；|;|。|$))",
@@ -381,6 +390,11 @@ def _extract_owner_due(text: str) -> tuple[str, str]:
     if not owner_match:
         owner_match = re.search(
             r"(?:^|[，,；;。\s])(?P<owner>[\u4e00-\u9fff]{2,6})(?=负责(?:补充|补齐|准备|制定|整理|更新|执行|提交|调整|统一|推进|跟进|修复|验证|测试|完成|确认|处理))",
+            text,
+        )
+    if not owner_match:
+        owner_match = re.search(
+            r"(?:^|[，,；;。\s])(?P<owner>[\u4e00-\u9fff]{2,4})(?=负责)",
             text,
         )
     if not owner_match:
@@ -444,6 +458,10 @@ def _action_with_context(content: str, risk_text: str) -> str:
 
 
 def _is_risk(text: str) -> bool:
+    if re.search(r"(?:不属于|不是).{0,12}(?:风险|阻塞)|不影响", text):
+        return False
+    if re.search(r"(?:失败|异常)(?:日志|报告|清单).{0,12}由[\u4e00-\u9fff]{2,6}负责", text):
+        return False
     return any(word in text for word in RISK_WORDS)
 
 
@@ -530,6 +548,9 @@ def _fallback_insights(
             })
             continue
         if _is_missing_declaration(claim):
+            continue
+        if not field_label and re.search(r"不影响|(?:不属于|不是).{0,12}(?:风险|阻塞)", claim):
+            background.append({"content": _clean_clause(claim), "evidence_ids": [fact["citation"]]})
             continue
         is_background = field_label in {"background", "decision"}
         fact_risks: list[dict[str, Any]] = []
@@ -985,6 +1006,10 @@ def _explicit_source_requirements(evidence: list[dict[str, str]]) -> list[dict[s
         label = _field_label(excerpt)
         if label not in {"risk", "action"}:
             continue
+        if label == "action" and _is_proposal(_clean_clause(excerpt)):
+            # A proposal is intentionally kept outside confirmed actions; it is
+            # verified through the conflict/proposal checks below.
+            continue
         clauses = _fact_clauses(excerpt)
         owner, due = _extract_owner_due(excerpt)
         requirements.append({
@@ -1032,6 +1057,9 @@ def verify_citations(artifacts: dict[str, str], evidence: list[dict[str, str]]) 
     baseline = _fallback_insights("", baseline_facts)
     combined_artifacts = "\n".join(artifacts.values())
     weekly_report = artifacts.get("weekly_report_markdown", "")
+    # If a dedicated risk register was requested/generated, verify that artifact
+    # itself. A weekly-only task may legitimately have no separate register.
+    risk_surfaces = risk_register or weekly_report
     conflicts = _detect_conflicts(baseline_facts)
     if conflicts and ("## 决策冲突" not in weekly_report or "尚未确认" not in weekly_report):
         semantic_warnings.append("材料存在未解决的上线决策冲突，但交付物未明确标注冲突与未确认状态。")
@@ -1047,7 +1075,7 @@ def verify_citations(artifacts: dict[str, str], evidence: list[dict[str, str]]) 
         if requirement["kind"] == "risk":
             matching_line = next(
                 (
-                    line for line in risk_register.splitlines()
+                    line for line in risk_surfaces.splitlines()
                     if _matches_explicit_risk(content, line, citation)
                 ),
                 "",
