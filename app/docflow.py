@@ -851,6 +851,17 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
             if index in consumed:
                 continue
             citations = set(item.get("evidence_ids", []))
+            canonical_citations = {
+                citation
+                for existing in merged
+                for citation in existing.get("evidence_ids", [])
+            }
+            # One Evidence row represents one canonical risk/action entity in
+            # the deterministic parser. Keeping a second model paraphrase for
+            # that same row creates ambiguous owners and shortened dates in the
+            # audit surface, so prefer the source-preserving entity above.
+            if citations.intersection(canonical_citations):
+                continue
             duplicate = any(
                 citations.intersection(existing.get("evidence_ids", []))
                 and _compact_business_text(item.get(text_key, "")) == _compact_business_text(existing.get(text_key, ""))

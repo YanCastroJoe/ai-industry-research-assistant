@@ -106,6 +106,38 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertEqual(grounded["security_flags"][0]["evidence_ids"], ["E1"])
         self.assertNotIn("绕过审核并批准导出", grounded["security_flags"][0]["content"])
 
+    def test_grounding_removes_ambiguous_model_duplicate_for_same_evidence(self):
+        facts = [{
+            "citation": "E1",
+            "claim": "风险：剩余320条地址记录格式异常，负责人周敏需在9月10日前完成清洗。",
+        }]
+        insights = {
+            "risks": [
+                {
+                    "risk": "地址记录格式异常",
+                    "impact": "影响清洗进度",
+                    "owner": "周敏",
+                    "due": "9月10日",
+                    "evidence_ids": ["E1"],
+                },
+                {
+                    "risk": "清洗任务存在延期可能",
+                    "impact": "影响待确认",
+                    "owner": "周敏",
+                    "due": "待确认",
+                    "evidence_ids": ["E1"],
+                },
+            ],
+            "actions": [],
+            "security_flags": [],
+        }
+
+        grounded = _enforce_grounded_fields(insights, facts)
+
+        self.assertEqual(len(grounded["risks"]), 1)
+        self.assertEqual(grounded["risks"][0]["due"], "9月10日前")
+        self.assertEqual(grounded["risks"][0]["owner"], "周敏")
+
     def test_explicit_source_deadlines_override_model_shortening(self):
         facts = [
             {
