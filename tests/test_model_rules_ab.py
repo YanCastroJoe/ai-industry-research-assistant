@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.evaluate_model_rules_ab import evaluation_mode, percentile, score_result, summarize
+from scripts.evaluate_model_rules_ab import evaluation_mode, percentile, run_once, score_result, summarize
 from app.docflow import AgentRuntime
 
 
@@ -76,6 +76,32 @@ class ModelRulesAbEvaluationTests(unittest.TestCase):
         self.assertEqual(report["model"]["total_tokens"], 200)
         self.assertIsNone(report["model"]["estimated_cost_total"])
         self.assertIsNone(report["rules"]["estimated_cost_total"])
+
+    def test_run_once_records_verifier_warnings(self) -> None:
+        result = {
+            "execution": {
+                "planner_mode": "rules",
+                "content_mode": "rules",
+                "model_call_count": 0,
+                "model_latency_ms": 0,
+                "model_usage": {},
+            },
+            "metrics": {"elapsed_ms": 1, "retry_count": 0},
+            "verification": {
+                "overall_passed": False,
+                "content_quality_passed": False,
+                "warnings": ["synthetic verifier warning"],
+            },
+            "evidence": [{"id": "E1", "excerpt": "完成灰度部署。"}],
+            "insights": {"risks": [], "actions": []},
+            "artifacts": {"weekly_report_markdown": "## 关键进展\n完成灰度部署 [E1]"},
+            "memory": {"applied": 1},
+        }
+        case = {"id": "synthetic", "goal": "生成周报", "source": "完成灰度部署。", "bindings": [], "required_artifact_fragments": []}
+        with patch.object(AgentRuntime, "execute", return_value=result):
+            row = run_once(case, "rules", 1)
+
+        self.assertEqual(row["verification_warnings"], ["synthetic verifier warning"])
 
 
 if __name__ == "__main__":

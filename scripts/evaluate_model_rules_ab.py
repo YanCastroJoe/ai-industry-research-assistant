@@ -204,7 +204,7 @@ def run_once(case: dict[str, Any], mode: str, repeat: int) -> dict[str, Any]:
         "tokens": execution.get("model_usage", {}),
         "estimated_cost": execution.get("estimated_cost"),
         "cost_currency": execution.get("cost_currency"),
-        "verification_warnings": verification.get("warnings", []),
+        "verification_warnings": result.get("verification", {}).get("warnings", []),
         "score": score_result(result, case, mode),
     }
 
