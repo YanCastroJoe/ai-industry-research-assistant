@@ -97,11 +97,14 @@ flowchart TD
 
 # M2：60 组模型/规则受控配对 A/B（需配置模型）
 .\.venv\Scripts\python.exe -X utf8 scripts\evaluate_model_rules_ab.py --cases evaluation\docflow_model_rules_ab_cases_60.json --mode paired --require-m2-suite --output evaluation\reports\docflow-model-rules-m2-cloud.json
+
+# M3：强制真实模型路径并校验阶段诊断、Token 与成本覆盖
+.\.venv\Scripts\python.exe -X utf8 scripts\check_model_runtime.py
 ```
 
 2026-09-04 回归与云端验收结果：
 
-- DocFlow 测试套件：99 项通过。
+- DocFlow 测试套件：102 项通过。
 - 固定合成任务：20/20 通过。
 - M2 受控配对 A/B：模型模式 60/60、规则模式 60/60；60 对输入与 Evidence 一致，模型路径 0 次降级、0 次重试。
 - M2 模型路径完成 120 次真实调用，共记录 116,006 Tokens；P50 4.45 秒、P95 5.79 秒。规则路径 P50 2.59 ms、P95 3.76 ms；因未配置单价，不报告估算成本。
@@ -109,6 +112,7 @@ flowchart TD
 - 覆盖显式风险/行动/进展字段绑定、负责人和日期保留、Verifier 独立缺失检查、访客会话隔离、认证与限流。
 - 合成检索故障在第 2 次尝试恢复。
 - 云端隔离实例与正式实例分别通过一次强制模型验收：Planner 和内容生成均返回提供方请求 ID、Token 与模型耗时，未发生规则降级；审核前导出受阻，审核通过后导出成功。
+- M3 诊断页按当前访客 Session 展示终态任务成功率、模型降级/重试率、总耗时与模型耗时 P50/P95、Planner/内容理解分阶段调用、Token 和计价覆盖；成本仅在完整配置费率时汇总，并保留费率标签与缓存命中/未命中口径。
 - 公网入口未认证返回 HTTP 401，认证后首页与 `/ready` 均返回 HTTP 200。
 
 上述结果只代表当前固定合成回归集和云端受控配对验收，不代表生产准确率或 SLA；两条路径在工程硬门禁下打平，尚未采集真人盲评偏好和人工修改率。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md)、[真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md) 与 [M2 配对评测报告](evaluation/reports/docflow-model-rules-m2-2026-09-04.md)。

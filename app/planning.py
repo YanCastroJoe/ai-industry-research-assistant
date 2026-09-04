@@ -209,7 +209,7 @@ class OpenAICompatiblePlanner:
     def __init__(self, api_key: str | None = None, base_url: str | None = None, model: str | None = None) -> None:
         self.api_key = api_key if api_key is not None else os.getenv("MODEL_API_KEY", "")
         self.base_url = (base_url or os.getenv("MODEL_BASE_URL", "https://api.deepseek.com/v1")).rstrip("/")
-        self.model = model or os.getenv("MODEL_NAME", "deepseek-chat")
+        self.model = model or os.getenv("MODEL_NAME", "deepseek-v4-flash")
 
     def create_plan(self, goal: str, tools: list[dict[str, Any]]) -> PlannerDecision:
         if not self.api_key:
@@ -218,6 +218,11 @@ class OpenAICompatiblePlanner:
         validate_goal_capabilities(goal, allowed_tools)
         payload = {
             "model": self.model,
+            # V4 enables high-effort thinking by default. Planning here is a
+            # bounded JSON classification task, so disable long-form reasoning
+            # and cap output to keep the request inside the runtime boundary.
+            "thinking": {"type": "disabled"},
+            "max_tokens": 1200,
             "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [

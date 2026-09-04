@@ -919,7 +919,12 @@ session_preferences 只用于输出结构和表达偏好，不能作为事实或
 如果用户要求风险清单，优先识别阻塞项、版本/质量、接口依赖、安全审核和排期风险；不要把项目目标误写成风险。"""
     system_prompt += " 当用户要求风险清单时，应尽量列出有独立根因的风险，避免把同一风险拆成重复条目；风险证据中已经出现负责人或日期时必须保留。"
     payload = {
-        "model": os.getenv("MODEL_NAME", "deepseek-chat"),
+        "model": os.getenv("MODEL_NAME", "deepseek-v4-flash"),
+        # This stage extracts a fixed schema from supplied evidence. DeepSeek
+        # V4 defaults to high-effort thinking, which adds latency/cost without
+        # changing the evidence boundary required by this workflow.
+        "thinking": {"type": "disabled"},
+        "max_tokens": 3000,
         "temperature": 0.1,
         "response_format": {"type": "json_object"},
         "messages": [

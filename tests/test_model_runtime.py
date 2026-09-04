@@ -283,6 +283,9 @@ class ModelRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("unit-test-secret", json.dumps(execution))
         self.assertEqual([call.kwargs["timeout"] for call in urlopen.call_args_list], [20, 40])
+        request_payloads = [json.loads(call.args[0].data.decode("utf-8")) for call in urlopen.call_args_list]
+        self.assertEqual([item["thinking"] for item in request_payloads], [{"type": "disabled"}] * 2)
+        self.assertEqual([item["max_tokens"] for item in request_payloads], [1200, 3000])
         self.assertEqual(model_runtime_status(True)["model_reachability"], "reachable")
         self.assertTrue(result["verification"]["overall_passed"])
 

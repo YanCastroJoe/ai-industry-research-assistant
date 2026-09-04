@@ -38,6 +38,8 @@ MODEL_COST_RATE_LABEL=
 
 `model_path_complete=true` 只在 Planner 与内容理解均使用模型成功时成立。任一阶段失败时，`degraded=true`，最终结果必须明确标为 `rules_fallback`，不能称为模型输出。
 
+DocFlow 的 Planner 与内容理解都是受证据约束的结构化 JSON 任务。DeepSeek V4 默认启用高强度思考，但这两个阶段显式使用非思考模式并限制最大输出，以降低无必要的延迟和 Token 消耗；该设置不改变本地 SafePlanner、Evidence 或 Verifier 门禁。
+
 ## 验收
 
 ```powershell
