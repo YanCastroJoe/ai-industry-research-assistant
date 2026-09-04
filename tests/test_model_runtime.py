@@ -164,6 +164,21 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertEqual(model_runtime_status(True)["model_reachability"], "unavailable")
         self.assertTrue(result["verification"]["overall_passed"])
 
+    def test_model_timeout_is_labeled_and_falls_back(self):
+        with patch.dict("os.environ", {"MODEL_API_KEY": "unit-test-secret"}, clear=False), patch(
+            "urllib.request.urlopen", side_effect=TimeoutError("timed out")
+        ):
+            result = AgentRuntime().execute(GOAL, SOURCE)
+
+        execution = result["execution"]
+        self.assertTrue(execution["degraded"])
+        self.assertFalse(execution["model_path_complete"])
+        self.assertEqual(execution["planner_mode"], "rules_fallback")
+        self.assertEqual(execution["content_mode"], "rules_fallback")
+        self.assertEqual(execution["model_failure_count"], 2)
+        self.assertTrue(all(call["error_type"] == "TimeoutError" for call in execution["model_calls"]))
+        self.assertTrue(result["verification"]["overall_passed"])
+
     def test_repository_prefers_provider_usage_and_cost_over_output_size_estimate(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = DocflowRepository(Path(directory) / "model.db")
