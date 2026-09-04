@@ -24,6 +24,7 @@ from .docflow import AgentRuntime
 from .docflow_repository import DocflowRepository
 from .document_text import extract_uploaded_text
 from .job_coordinator import JobCoordinator, QueueCapacityError
+from .model_client import model_runtime_status
 from .observability import configure_event_logger, log_event
 from .planning import PlanValidationError, validate_goal_capabilities
 
@@ -674,12 +675,14 @@ def health() -> dict:
 @app.get("/ready")
 def readiness() -> JSONResponse:
     database = docflow_repository.operational_status()
+    runtime = runtime_config.public_dict()
+    runtime.update(model_runtime_status(runtime_config.model_configured))
     payload = {
         "status": "ready" if database["ok"] else "not_ready",
         "service": {"ok": True, "name": "docflow"},
         "database": database,
         "queue": job_coordinator.snapshot(),
-        "runtime": runtime_config.public_dict(),
+        "runtime": runtime,
         "boundaries": {
             "queue_scope": "single_process",
             "queued_jobs_durable": True,

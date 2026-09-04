@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+from .model_client import ModelCallError, call_chat_completion
 
 
 REQUIRED_PREFIX = ("retrieve_documents", "extract_facts", "derive_task_insights", "compose_document")
@@ -41,10 +41,13 @@ class PlannerDecision:
     plan: list[dict[str, str]]
     mode: str
     fallback_reason: str = ""
+    model_call: dict[str, Any] | None = None
 
 
 class PlanValidationError(ValueError):
-    pass
+    def __init__(self, message: str, model_call: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.model_call = model_call
 
 
 def required_external_capabilities(goal: str) -> list[str]:
@@ -183,20 +186,23 @@ class OpenAICompatiblePlanner:
                 {"role": "user", "content": json.dumps({"goal": goal, "tools": tools}, ensure_ascii=False)},
             ],
         }
-        request = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                response_payload = json.loads(response.read().decode("utf-8"))
-            content = response_payload["choices"][0]["message"]["content"]
+            content, model_call = call_chat_completion(
+                payload,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                stage="planner",
+                timeout=20,
+            )
             raw_plan = _extract_json_object(content).get("plan")
-            return PlannerDecision(validate_plan(normalize_model_plan(raw_plan), allowed_tools), mode="model")
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, KeyError, ValueError, json.JSONDecodeError) as error:
-            raise PlanValidationError(str(error)) from error
+            plan = validate_plan(normalize_model_plan(raw_plan), allowed_tools)
+            return PlannerDecision(plan, mode="model", model_call=model_call)
+        except ModelCallError as error:
+            raise PlanValidationError(str(error), model_call=error.telemetry) from error
+        except (KeyError, ValueError, json.JSONDecodeError, PlanValidationError) as error:
+            if "model_call" in locals():
+                model_call = {**model_call, "status": "invalid_output", "error_type": type(error).__name__}
+            raise PlanValidationError(str(error), model_call=locals().get("model_call")) from error
 
 
 class SafePlanner:
@@ -213,4 +219,9 @@ class SafePlanner:
             return self.model_planner.create_plan(goal, tools)
         except PlanValidationError as error:
             fallback = self.rule_planner.create_plan(goal, tools)
-            return PlannerDecision(fallback.plan, mode="rules_fallback", fallback_reason=str(error))
+            return PlannerDecision(
+                fallback.plan,
+                mode="rules_fallback",
+                fallback_reason=str(error),
+                model_call=error.model_call,
+            )

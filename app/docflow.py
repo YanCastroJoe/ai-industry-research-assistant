@@ -4,13 +4,12 @@ import json
 import os
 import re
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from .execution import ExecutionPolicy, ToolExecutionFailed, invoke_with_policy
+from .model_client import ModelCallError, call_chat_completion
 from .planning import SafePlanner, build_rule_plan
 
 
@@ -790,26 +789,38 @@ session_preferences 只用于输出结构和表达偏好，不能作为事实或
         ],
     }
     base_url = os.getenv("MODEL_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
     try:
         # Finish the network attempt before the 45 s tool boundary so a slow
         # provider can degrade to grounded local rules instead of failing the run.
-        with urllib.request.urlopen(request, timeout=40) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
-        content = response_payload["choices"][0]["message"]["content"]
+        content, model_call = call_chat_completion(
+            payload,
+            api_key=api_key,
+            base_url=base_url,
+            stage="content",
+            timeout=40,
+        )
         insights = _enforce_grounded_fields(_normalize_insights(_extract_json(content), facts), facts)
         insights["presentation"] = presentation
         insights["memory_application"] = presentation
+        insights["model_call"] = model_call
         return insights
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, KeyError, ValueError, json.JSONDecodeError) as error:
+    except ModelCallError as error:
         fallback = _fallback_insights(goal, facts, presentation)
         fallback["mode"] = "rules_fallback"
-        fallback["fallback_reason"] = f"{type(error).__name__}: {error}"
+        fallback["fallback_reason"] = str(error)
+        fallback["model_call"] = error.telemetry
+        fallback["memory_application"] = presentation
+        return fallback
+    except (KeyError, ValueError, json.JSONDecodeError) as error:
+        fallback = _fallback_insights(goal, facts, presentation)
+        fallback["mode"] = "rules_fallback"
+        fallback["fallback_reason"] = f"{type(error).__name__}: invalid model output"
+        fallback["model_call"] = {
+            **locals().get("model_call", {}),
+            "stage": "content",
+            "status": "invalid_output",
+            "error_type": type(error).__name__,
+        }
         fallback["memory_application"] = presentation
         return fallback
 
@@ -1162,9 +1173,11 @@ class AgentRuntime:
             plan = planner_decision.plan
             planner_mode = planner_decision.mode
             planner_fallback_reason = planner_decision.fallback_reason
+            planner_model_call = planner_decision.model_call
         else:
             planner_mode = "resume"
             planner_fallback_reason = ""
+            planner_model_call = None
         if plan_callback:
             plan_callback(plan, {"mode": planner_mode, "fallback_reason": planner_fallback_reason})
         state: dict[str, Any] = {
@@ -1216,6 +1229,16 @@ class AgentRuntime:
             parse_session_preferences(state.get("memory_context", []), context_config),
         )
         content_mode = state.get("insights", {}).get("mode", "rules")
+        content_model_call = state.get("insights", {}).get("model_call")
+        model_calls = [call for call in (planner_model_call, content_model_call) if isinstance(call, dict)]
+        model_usage = {
+            key: sum(int(call.get("usage", {}).get(key, 0) or 0) for call in model_calls)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        }
+        priced_calls = [float(call["estimated_cost"]) for call in model_calls if call.get("estimated_cost") is not None]
+        estimated_cost = round(sum(priced_calls), 8) if len(priced_calls) == len(model_calls) and model_calls else None
+        successful_model_calls = sum(call.get("status") == "succeeded" for call in model_calls)
+        failed_model_calls = len(model_calls) - successful_model_calls
         fallback_reasons = list(dict.fromkeys(
             reason
             for reason in (planner_fallback_reason, state.get("insights", {}).get("fallback_reason", ""))
@@ -1231,6 +1254,15 @@ class AgentRuntime:
                 "content_mode": content_mode,
                 "degraded": degraded,
                 "fallback_reasons": fallback_reasons,
+                "model_path_complete": planner_mode == "model" and content_mode == "model",
+                "model_calls": model_calls,
+                "model_call_count": len(model_calls),
+                "model_success_count": successful_model_calls,
+                "model_failure_count": failed_model_calls,
+                "model_latency_ms": sum(int(call.get("latency_ms", 0) or 0) for call in model_calls),
+                "model_usage": model_usage,
+                "estimated_cost": estimated_cost,
+                "cost_currency": next((str(call.get("cost_currency")) for call in model_calls if call.get("cost_currency")), None),
             },
             "memory": {
                 "items_used": memory_application["applied"],
@@ -1255,6 +1287,14 @@ class AgentRuntime:
                 "attempts": len(trace),
                 "retry_count": retry_count,
                 "tool_success_rate": round(completed_steps / max(len(plan) - start_sequence + 1, 1), 4),
+                "model_call_count": len(model_calls),
+                "model_success_count": successful_model_calls,
+                "model_failure_count": failed_model_calls,
+                "model_latency_ms": sum(int(call.get("latency_ms", 0) or 0) for call in model_calls),
+                "prompt_tokens": model_usage["prompt_tokens"],
+                "completion_tokens": model_usage["completion_tokens"],
+                "total_tokens": model_usage["total_tokens"],
+                "estimated_cost": estimated_cost,
             },
         }
 

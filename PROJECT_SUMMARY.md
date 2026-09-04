@@ -14,7 +14,7 @@
 
 - 设计 `Planner → Tool Registry → Agent Runtime` 工作流，以 Instruction/Source/Memory/Evidence 分层上下文驱动检索、事实抽取和带 `[E#]` 引用的文档生成，并接入人工审核。
 - 实现 SafePlanner 工具白名单、RulePlanner 回退、超时重试与 SQLite Trace/Checkpoint；支持异步排队、幂等提交及 `queued` 任务重启恢复。
-- 基于官方 MCP Python SDK 接入 stdio 工具，并以 AgentOps 汇总引用和运行诊断；74 项自动化测试通过，固定合成回归集 20/20（仅代表该固定集）。
+- 基于官方 MCP Python SDK 接入 stdio 工具，并以 AgentOps 汇总引用和运行诊断；79 项自动化测试通过，固定合成回归集 20/20（仅代表该固定集）。
 
 ### 详细版
 
@@ -23,7 +23,7 @@
 - 针对长链路工具瞬时故障导致整次任务重跑的问题，实现超时、有限重试、错误分类与 SQLite 检查点恢复，按 Run/Step/Attempt 记录执行轨迹，可从最近成功步骤继续执行。
 - 实现 Instruction/Source/Memory/Evidence 分层上下文与可视化 Trace，支持受众、信息焦点和证据预算配置；新增受控异步队列、SQLite 排队任务重启恢复、幂等提交、Request ID/JSON 日志、任务进度轮询及 AgentOps 质量门禁，并基于官方 MCP SDK 完成 stdio 工具发现与调用。
 - 重构演示界面为“任务创建 → 执行检查 → 人工审核”的渐进式路径，提供业务模板和独立 AgentOps 诊断页；界面用于呈现真实运行数据，不把静态流程图包装成多 Agent 能力。
-- 建立 74 项 DocFlow 单元、API、恢复、安全、前端、MCP 与发布边界回归测试，并构建 20 条固定合成任务与故障场景；当前本地规则模式下固定集 20/20 通过，工具选择 Precision/Recall、引用与规则内容门禁均为 100%。
+- 建立 79 项 DocFlow 单元、API、恢复、安全、前端、MCP、模型运行与发布边界回归测试，并构建 20 条固定合成任务与故障场景；当前本地规则模式下固定集 20/20 通过，工具选择 Precision/Recall、引用与规则内容门禁均为 100%。
 
 ## 面试时必须主动说明
 

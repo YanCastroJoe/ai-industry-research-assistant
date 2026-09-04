@@ -38,6 +38,14 @@ http://127.0.0.1:8010
 
 脚本会自动跑通健康检查、Session Memory、任务创建、Planner/Runtime、引用校验、人工审核和 Markdown 导出。看到 `[PASS]` 后即可开始面试演示。
 
+配置模型后必须额外执行：
+
+```powershell
+.\check-demo.ps1 -RequireModel
+```
+
+该模式要求 Planner 和内容理解均完成真实模型调用，并且提供方返回请求 ID 与 Token 用量；任何规则降级都会直接判定失败。
+
 ## 4. 三分钟演示流程
 
 ### 场景

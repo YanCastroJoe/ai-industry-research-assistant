@@ -98,7 +98,7 @@ flowchart TD
 
 2026-09-03 本地回归结果：
 
-- DocFlow 测试套件：74 项通过。
+- DocFlow 测试套件：79 项通过。
 - 固定合成任务：20/20 通过。
 - 覆盖 10 次连续运行、6 次并发运行、幂等提交、任务删除、损坏 PDF、Memory、Trace、Checkpoint、审核与导出。
 - 覆盖显式风险/行动/进展字段绑定、负责人和日期保留、Verifier 独立缺失检查、访客会话隔离、认证与限流。
@@ -123,12 +123,31 @@ python -m venv .venv
 
 检查通过后，可按 [DocFlow 三分钟演示手册](DEMO.md) 展示完整链路。
 
+若已配置模型，使用强制模型验收，任何 Planner 或内容生成降级都会令检查失败：
+
+```powershell
+.\check-demo.ps1 -RequireModel
+```
+
+每次真实调用会记录阶段、模型名、提供方请求 ID、Token、模型耗时和可选成本估算；不记录 API Key。配置和验收口径见 [模型运行与验收](docs/model-runtime.md)。
+
+Linux/云服务器可用同一套严格口径验收；密码只从环境变量读取，不进入命令行参数：
+
+```bash
+export DOCFLOW_BASE_URL="https://docflow.example.com"
+export DOCFLOW_DEMO_USERNAME="interviewer"
+read -s -p "DocFlow password: " DOCFLOW_DEMO_PASSWORD; echo
+export DOCFLOW_DEMO_PASSWORD
+python3 scripts/check_model_runtime.py
+```
+
 ### 受限公网演示
 
 复制 `.env.example` 为 `.env`，设置 `DOCFLOW_DEMO_MODE=true`，并填写强随机的 `DOCFLOW_DEMO_USERNAME` 与 `DOCFLOW_DEMO_PASSWORD`。`compose.public-demo.yml` 默认只绑定 `127.0.0.1:8010`，必须通过带 TLS 的反向代理发布，不能直接暴露应用端口。
 
 ```powershell
 .\check-demo.ps1 -BaseUrl "https://docflow.example.com" -Username "interviewer" -Password "<demo-password>"
+.\check-demo.ps1 -BaseUrl "https://docflow.example.com" -Username "interviewer" -Password "<demo-password>" -RequireModel
 ```
 
 <details>

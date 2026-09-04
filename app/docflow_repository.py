@@ -365,7 +365,11 @@ class DocflowRepository:
             )
 
     def complete_run(self, task_id: int, run_id: int, plan: list[dict], result: dict) -> dict:
-        token_estimate = len(json.dumps(result, ensure_ascii=False)) // 4
+        execution = result.get("execution", {})
+        actual_tokens = int(execution.get("model_usage", {}).get("total_tokens", 0) or 0)
+        token_estimate = actual_tokens or len(json.dumps(result, ensure_ascii=False)) // 4
+        actual_cost = execution.get("estimated_cost")
+        cost_estimate = float(actual_cost) if actual_cost is not None else 0.0
         with self._connect() as connection:
             connection.execute(
                 """UPDATE docflow_tasks
@@ -375,9 +379,9 @@ class DocflowRepository:
             )
             connection.execute(
                 """UPDATE docflow_runs
-                   SET status = 'completed', completed_at = CURRENT_TIMESTAMP, token_estimate = ?
+                   SET status = 'completed', completed_at = CURRENT_TIMESTAMP, token_estimate = ?, cost_estimate = ?
                    WHERE id = ?""",
-                (token_estimate, run_id),
+                (token_estimate, cost_estimate, run_id),
             )
         return self.get_task(task_id)
 

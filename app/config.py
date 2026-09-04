@@ -24,6 +24,19 @@ def _boolean(name: str, default: bool = False) -> bool:
     raise RuntimeError(f"{name} 必须是 true 或 false")
 
 
+def _optional_non_negative_float(name: str) -> float | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} 必须是非负数字") from error
+    if value < 0:
+        raise RuntimeError(f"{name} 必须是非负数字")
+    return value
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     max_workers: int
@@ -32,6 +45,8 @@ class RuntimeConfig:
     model_name: str
     model_configured: bool
     model_reachability: str
+    model_cost_tracking: bool
+    model_cost_currency: str
 
     def public_dict(self) -> dict:
         return asdict(self)
@@ -65,6 +80,8 @@ def load_runtime_config() -> RuntimeConfig:
     max_workers = _bounded_int("DOCFLOW_MAX_WORKERS", 2, 1, 8)
     max_pending = _bounded_int("DOCFLOW_MAX_PENDING", 20, max_workers, 100)
     model_key = os.getenv("MODEL_API_KEY", "").strip()
+    input_cost = _optional_non_negative_float("MODEL_INPUT_COST_PER_MILLION")
+    output_cost = _optional_non_negative_float("MODEL_OUTPUT_COST_PER_MILLION")
     return RuntimeConfig(
         max_workers=max_workers,
         max_pending=max_pending,
@@ -74,6 +91,8 @@ def load_runtime_config() -> RuntimeConfig:
         # A configured key is not proof that the remote model can be reached.
         # The actual run result exposes model vs rules_fallback separately.
         model_reachability="not_tested" if model_key else "not_configured",
+        model_cost_tracking=input_cost is not None and output_cost is not None,
+        model_cost_currency=os.getenv("MODEL_COST_CURRENCY", "CNY").strip().upper() or "CNY",
     )
 
 

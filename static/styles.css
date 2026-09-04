@@ -175,6 +175,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .status.queued, .status.running { color: var(--primary); background: #efefff; }
 .run-context { margin: 13px 0 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; }
 .task-mode { margin: 0; color: var(--muted); font-size: 10px; }
+.model-call-summary { margin: 8px 0 0; padding: 9px 11px; border: 1px solid #d9e4f2; border-radius: 8px; color: #35516f; background: #f7fbff; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .execution-alert { margin: 9px 0 0; padding: 10px 12px; border: 1px solid #f3d49a; border-radius: 8px; color: #8a5a00; background: #fff9eb; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
 .submit-row > div { min-width: 0; }
 .submit-row > div p { margin: 0; }

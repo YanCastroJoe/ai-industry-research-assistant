@@ -299,6 +299,12 @@ async function loadRuntimeStatus() {
     if (!runtime.model_configured) {
       setRuntimeChip(modelStatus, '模型未配置', 'warning');
       expectedMode.textContent = '预计执行模式：本地规则（未配置模型）';
+    } else if (runtime.model_reachability === 'reachable') {
+      setRuntimeChip(modelStatus, '模型最近调用成功', 'ok');
+      expectedMode.textContent = `模型：${runtime.model_name}；最近一次真实调用可达，失败时仍会自动降级`;
+    } else if (runtime.model_reachability === 'unavailable') {
+      setRuntimeChip(modelStatus, '模型最近调用失败', 'warning');
+      expectedMode.textContent = `模型：${runtime.model_name}；最近一次调用失败，当前保留本地规则降级`;
     } else {
       setRuntimeChip(modelStatus, '模型已配置 · 待运行验证', 'unknown');
       expectedMode.textContent = '预计执行模式：优先模型；调用失败时自动降级为本地规则';
@@ -730,10 +736,23 @@ function renderTask(task) {
   const contextLayers = task.result?.context?.layers?.length || 0;
   const modeLabel = mode === 'model' ? '模型语义分析' : mode === 'rules_fallback' ? '本地规则降级' : '本地规则分析';
   node.querySelector('.task-mode').textContent = `实际执行：${modeLabel} · Planner：${plannerMode} · Context：${contextLayers} 层 · Session Memory：召回 ${memoryRecalled} 条 · 应用 ${memoryApplied} 条`;
+  const modelCallSummary = node.querySelector('.model-call-summary');
+  const modelCalls = Array.isArray(execution.model_calls) ? execution.model_calls : [];
+  if (modelCalls.length) {
+    const usage = execution.model_usage || {};
+    const modelNames = [...new Set(modelCalls.map((call) => call.model).filter(Boolean))].join('、') || '未记录';
+    const callStages = modelCalls.map((call) => `${call.stage || 'unknown'}:${call.status || 'unknown'}`).join(' · ');
+    const costText = execution.estimated_cost === null || execution.estimated_cost === undefined
+      ? '成本未配置费率'
+      : `估算成本 ${execution.cost_currency || ''} ${Number(execution.estimated_cost).toFixed(6)}`.trim();
+    modelCallSummary.hidden = false;
+    modelCallSummary.textContent = `真实模型调用：${callStages} · 模型 ${modelNames} · ${usage.total_tokens || 0} Tokens · 模型耗时 ${execution.model_latency_ms || 0} ms · ${costText}`;
+  }
   const executionAlert = node.querySelector('.execution-alert');
   if (execution.degraded || mode === 'rules_fallback' || plannerMode === 'rules_fallback') {
     executionAlert.hidden = false;
-    executionAlert.textContent = '本次已降级为本地规则。模型调用未完成，当前结果不应标记为模型输出；技术原因保留在完整结构化结果中。';
+    const fallbackReason = Array.isArray(execution.fallback_reasons) ? execution.fallback_reasons.filter(Boolean).join('；') : '';
+    executionAlert.textContent = `本次已降级为本地规则。模型调用未完成，当前结果不应标记为模型输出。${fallbackReason ? `原因：${fallbackReason.slice(0, 240)}` : ''}`;
     setRuntimeChip(modelStatus, '模型本次调用降级', 'warning');
   } else if (mode === 'model') {
     setRuntimeChip(modelStatus, '模型本次调用成功', 'ok');
