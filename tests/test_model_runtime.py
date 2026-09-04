@@ -153,6 +153,24 @@ class ModelRuntimeTests(unittest.TestCase):
                     )
                 },
                 "evidence": [{"id": "E1"}, {"id": "E2"}],
+                "insights": {
+                    "risks": [
+                        {
+                            "risk": "退款政策存在两个版本",
+                            "owner": "李明",
+                            "due": "周五前",
+                            "evidence_ids": ["E1"],
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "content": "补充边界案例",
+                            "owner": "王芳",
+                            "due": "下周二",
+                            "evidence_ids": ["E2"],
+                        }
+                    ],
+                },
                 "execution": {
                     "model_path_complete": True,
                     "model_call_count": 2,

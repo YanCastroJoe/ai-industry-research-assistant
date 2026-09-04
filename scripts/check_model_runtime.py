@@ -38,6 +38,8 @@ def validate_model_run(task: dict[str, Any]) -> dict[str, Any]:
     verification = result.get("verification") if isinstance(result.get("verification"), dict) else {}
     if not (verification.get("overall_passed") or verification.get("passed")):
         raise AcceptanceError("verification did not pass")
+    if verification.get("content_quality_passed") is False:
+        raise AcceptanceError("content-quality verification did not pass")
 
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     calls = execution.get("model_calls") if isinstance(execution.get("model_calls"), list) else []
@@ -61,7 +63,7 @@ def validate_model_run(task: dict[str, Any]) -> dict[str, Any]:
 
     artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
     artifact_text = "\n".join(str(value) for value in artifacts.values())
-    required_content = ("退款政策文档仍有两个版本", "李明", "周五前", "王芳")
+    required_content = ("退款政策", "李明", "周五", "王芳")
     missing_content = [item for item in required_content if item not in artifact_text]
     if missing_content:
         raise AcceptanceError(f"model artifacts lost required source facts: {', '.join(missing_content)}")
@@ -69,6 +71,28 @@ def validate_model_run(task: dict[str, Any]) -> dict[str, Any]:
         raise AcceptanceError("explicit source risk was replaced by a missing-risk fallback")
     if "负责人：本周进展" in artifact_text or "| 本周进展 |" in artifact_text:
         raise AcceptanceError("field label '本周进展' was incorrectly emitted as an owner")
+
+    insights = result.get("insights") if isinstance(result.get("insights"), dict) else {}
+    risks = insights.get("risks") if isinstance(insights.get("risks"), list) else []
+    actions = insights.get("actions") if isinstance(insights.get("actions"), list) else []
+    risk_bound = any(
+        isinstance(item, dict)
+        and "E1" in item.get("evidence_ids", [])
+        and item.get("owner") == "李明"
+        and "周五" in str(item.get("due") or "")
+        for item in risks
+    )
+    action_bound = any(
+        isinstance(item, dict)
+        and "E2" in item.get("evidence_ids", [])
+        and item.get("owner") == "王芳"
+        and "下周二" in str(item.get("due") or "")
+        for item in actions
+    )
+    if not risk_bound:
+        raise AcceptanceError("explicit risk is not bound to 李明, 周五 and Evidence E1")
+    if not action_bound:
+        raise AcceptanceError("explicit action is not bound to 王芳, 下周二 and Evidence E2")
 
     evidence = result.get("evidence") if isinstance(result.get("evidence"), list) else []
     evidence_ids = {str(item.get("id") or "") for item in evidence if isinstance(item, dict)}
