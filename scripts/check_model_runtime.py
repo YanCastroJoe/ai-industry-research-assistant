@@ -102,6 +102,27 @@ def validate_model_run(task: dict[str, Any]) -> dict[str, Any]:
     return execution
 
 
+def validate_agentops_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    if int(metrics.get("terminal_count") or 0) < 1:
+        raise AcceptanceError("AgentOps summary did not include the completed task")
+    if float(metrics.get("execution_success_rate") or 0) != 1.0:
+        raise AcceptanceError("AgentOps execution success rate is not 100% for the isolated session")
+    if int(metrics.get("model_task_count") or 0) < 1 or int(metrics.get("model_call_count") or 0) < 2:
+        raise AcceptanceError("AgentOps summary did not aggregate the real model calls")
+    usage = metrics.get("model_usage") if isinstance(metrics.get("model_usage"), dict) else {}
+    if int(usage.get("total_tokens") or 0) < 1:
+        raise AcceptanceError("AgentOps summary did not aggregate provider token usage")
+    stages = {
+        str(item.get("stage") or "")
+        for item in summary.get("model_stage_breakdown", [])
+        if isinstance(item, dict)
+    }
+    if not {"planner", "content"}.issubset(stages):
+        raise AcceptanceError("AgentOps summary is missing planner/content stage diagnostics")
+    return metrics
+
+
 class Client:
     def __init__(self, base_url: str, username: str, password: str, session_id: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -188,6 +209,9 @@ def main() -> int:
     if status != 200 or not isinstance(exported, bytes) or len(exported) < 20:
         raise AcceptanceError("approved artifact export failed")
 
+    summary, _ = client.request("GET", "/api/docflow/evaluations/summary")
+    summary_metrics = validate_agentops_summary(summary)
+
     usage = execution["model_usage"]
     print("[PASS] DocFlow real-model acceptance completed")
     print(
@@ -200,6 +224,12 @@ def main() -> int:
             f"request_id={call['request_id']} tokens={call['usage']['total_tokens']} "
             f"latency_ms={call['latency_ms']}"
         )
+    print(
+        f"agentops_p50_ms={summary_metrics['latency_p50_ms']} "
+        f"agentops_p95_ms={summary_metrics['latency_p95_ms']} "
+        f"cost_coverage={summary_metrics['cost_coverage_rate']} "
+        f"estimated_cost={summary_metrics['estimated_cost_total']}"
+    )
     return 0
 
 

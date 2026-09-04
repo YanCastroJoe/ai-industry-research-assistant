@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFlow 协作式文档 Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260901-7" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -196,14 +196,15 @@
 
         <section class="panel evaluation-dashboard main-view" id="evaluation-dashboard" hidden>
           <div class="evaluation-header">
-            <div><p class="section-kicker">AGENTOPS / EVALUATION</p><h2>运行质量与反馈闭环</h2><p>聚合 Trace、Verifier 与人工审核结果，检查当前本地任务样本是否通过质量门禁。</p></div>
+            <div><p class="section-kicker">AGENTOPS / EVALUATION</p><h2>运行质量与成本诊断</h2><p>按当前访客 Session 聚合成功、降级、重试、延迟、Token、成本与人工审核结果。</p></div>
             <button id="refresh-evaluation" class="secondary" type="button">刷新观测</button>
           </div>
           <div class="evaluation-metrics"></div>
           <div class="mode-breakdown" aria-label="按实际执行模式统计"></div>
+          <section class="model-stage-section"><div class="section-heading"><h3>模型阶段诊断</h3><span>Planner / Content calls</span></div><div class="model-stage-breakdown"></div></section>
           <div class="evaluation-grid">
             <section><div class="section-heading"><h3>质量门禁</h3><span>Quality gates</span></div><div class="quality-gates"></div></section>
-            <section><div class="section-heading"><h3>最近运行诊断</h3><span>Recent runs</span></div><div class="evaluation-table-wrap"><table class="evaluation-table"><thead><tr><th>任务</th><th>状态</th><th>耗时</th><th>引用</th><th>诊断</th></tr></thead><tbody></tbody></table></div></section>
+            <section><div class="section-heading"><h3>最近运行诊断</h3><span>Recent runs</span></div><div class="evaluation-table-wrap"><table class="evaluation-table"><thead><tr><th>任务</th><th>状态</th><th>模式</th><th>总耗时</th><th>模型用量</th><th>诊断</th></tr></thead><tbody></tbody></table></div></section>
           </div>
           <p class="evaluation-notice"></p>
         </section>
@@ -266,6 +267,6 @@
       <div class="result-view" data-result-view="citations" hidden><section><div class="section-heading"><h3>引用校验</h3><span>Evidence verification</span></div><div class="verification-gates"></div><p class="verification-result"></p><div class="evidence-list"></div></section></div>
       <div class="result-view" data-result-view="review" hidden><section class="review"><div class="section-heading"><h3>人工审核</h3><span>Human in the loop</span></div><textarea class="review-note" placeholder="审核备注（可选）"></textarea><div class="actions"><button class="approve" type="button">通过并允许导出</button><button class="reject secondary" type="button">驳回并退回</button><button class="retry secondary" type="button" hidden>从检查点恢复</button></div><p class="review-message" aria-live="polite"></p><p class="export-message"></p></section></div>
     </template>
-    <script src="/static/app.js?v=20260903-3"></script>
+    <script src="/static/app.js?v=20260904-1"></script>
   </body>
 </html>

@@ -38,7 +38,7 @@ def _safe_provider(base_url: str) -> str:
     return urlparse(base_url).hostname or "openai-compatible"
 
 
-def _usage(payload: dict[str, Any]) -> dict[str, int]:
+def _usage(payload: dict[str, Any]) -> dict[str, Any]:
     raw = payload.get("usage") if isinstance(payload, dict) else None
     raw = raw if isinstance(raw, dict) else {}
 
@@ -51,24 +51,44 @@ def _usage(payload: dict[str, Any]) -> dict[str, int]:
     prompt_tokens = as_int(raw.get("prompt_tokens"))
     completion_tokens = as_int(raw.get("completion_tokens"))
     total_tokens = as_int(raw.get("total_tokens")) or prompt_tokens + completion_tokens
+    cache_metrics_available = (
+        "prompt_cache_hit_tokens" in raw or "prompt_cache_miss_tokens" in raw
+    )
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "prompt_cache_hit_tokens": as_int(raw.get("prompt_cache_hit_tokens")),
+        "prompt_cache_miss_tokens": as_int(raw.get("prompt_cache_miss_tokens")),
+        "cache_metrics_available": cache_metrics_available,
     }
 
 
-def _estimated_cost(usage: dict[str, int]) -> tuple[float | None, str]:
+def _estimated_cost(usage: dict[str, Any]) -> tuple[float | None, str, str]:
     input_rate = _optional_non_negative_float("MODEL_INPUT_COST_PER_MILLION")
+    cache_hit_rate = _optional_non_negative_float("MODEL_INPUT_CACHE_HIT_COST_PER_MILLION")
+    cache_miss_rate = _optional_non_negative_float("MODEL_INPUT_CACHE_MISS_COST_PER_MILLION")
     output_rate = _optional_non_negative_float("MODEL_OUTPUT_COST_PER_MILLION")
     currency = os.getenv("MODEL_COST_CURRENCY", "CNY").strip().upper() or "CNY"
+    if (
+        bool(usage.get("cache_metrics_available"))
+        and cache_hit_rate is not None
+        and cache_miss_rate is not None
+        and output_rate is not None
+    ):
+        cost = (
+            int(usage.get("prompt_cache_hit_tokens") or 0) * cache_hit_rate
+            + int(usage.get("prompt_cache_miss_tokens") or 0) * cache_miss_rate
+            + int(usage.get("completion_tokens") or 0) * output_rate
+        ) / 1_000_000
+        return round(cost, 8), currency, "provider_cache_split"
     if input_rate is None or output_rate is None:
-        return None, currency
+        return None, currency, "unconfigured"
     cost = (
-        usage["prompt_tokens"] * input_rate
-        + usage["completion_tokens"] * output_rate
+        int(usage.get("prompt_tokens") or 0) * input_rate
+        + int(usage.get("completion_tokens") or 0) * output_rate
     ) / 1_000_000
-    return round(cost, 8), currency
+    return round(cost, 8), currency, "flat_input"
 
 
 def _record_model_call(telemetry: dict[str, Any]) -> None:
@@ -118,9 +138,18 @@ def call_chat_completion(
         "status": "failed",
         "latency_ms": 0,
         "request_id": None,
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 0,
+            "cache_metrics_available": False,
+        },
         "estimated_cost": None,
         "cost_currency": os.getenv("MODEL_COST_CURRENCY", "CNY").strip().upper() or "CNY",
+        "cost_basis": "unconfigured",
+        "cost_rate_label": os.getenv("MODEL_COST_RATE_LABEL", "").strip(),
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "error_type": None,
     }
@@ -151,7 +180,7 @@ def call_chat_completion(
         raise ModelCallError(detail, telemetry) from error
 
     usage = _usage(response_payload)
-    cost, currency = _estimated_cost(usage)
+    cost, currency, cost_basis = _estimated_cost(usage)
     telemetry = {
         **base_telemetry,
         "status": "succeeded",
@@ -161,6 +190,7 @@ def call_chat_completion(
         "usage": usage,
         "estimated_cost": cost,
         "cost_currency": currency,
+        "cost_basis": cost_basis,
         "error_type": None,
     }
     _record_model_call(telemetry)

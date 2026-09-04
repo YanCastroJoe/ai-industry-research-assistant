@@ -47,6 +47,7 @@ class RuntimeConfig:
     model_reachability: str
     model_cost_tracking: bool
     model_cost_currency: str
+    model_cost_rate_label: str
 
     def public_dict(self) -> dict:
         return asdict(self)
@@ -81,18 +82,25 @@ def load_runtime_config() -> RuntimeConfig:
     max_pending = _bounded_int("DOCFLOW_MAX_PENDING", 20, max_workers, 100)
     model_key = os.getenv("MODEL_API_KEY", "").strip()
     input_cost = _optional_non_negative_float("MODEL_INPUT_COST_PER_MILLION")
+    cache_hit_cost = _optional_non_negative_float("MODEL_INPUT_CACHE_HIT_COST_PER_MILLION")
+    cache_miss_cost = _optional_non_negative_float("MODEL_INPUT_CACHE_MISS_COST_PER_MILLION")
     output_cost = _optional_non_negative_float("MODEL_OUTPUT_COST_PER_MILLION")
+    cost_tracking = output_cost is not None and (
+        input_cost is not None
+        or (cache_hit_cost is not None and cache_miss_cost is not None)
+    )
     return RuntimeConfig(
         max_workers=max_workers,
         max_pending=max_pending,
         model_mode="openai_compatible" if model_key else "local_rules",
-        model_name=os.getenv("MODEL_NAME", "deepseek-chat").strip() or "deepseek-chat",
+        model_name=os.getenv("MODEL_NAME", "deepseek-v4-flash").strip() or "deepseek-v4-flash",
         model_configured=bool(model_key),
         # A configured key is not proof that the remote model can be reached.
         # The actual run result exposes model vs rules_fallback separately.
         model_reachability="not_tested" if model_key else "not_configured",
-        model_cost_tracking=input_cost is not None and output_cost is not None,
+        model_cost_tracking=cost_tracking,
         model_cost_currency=os.getenv("MODEL_COST_CURRENCY", "CNY").strip().upper() or "CNY",
+        model_cost_rate_label=os.getenv("MODEL_COST_RATE_LABEL", "").strip(),
     )
 
 

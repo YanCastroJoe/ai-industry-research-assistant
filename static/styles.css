@@ -188,10 +188,10 @@ button:disabled { opacity: .6; cursor: wait; }
 .verification-gate.passed > span { color: var(--success); background: var(--success-soft); }
 .verification-gate.failed > span { color: var(--danger); background: var(--danger-soft); }
 .verification-gate.unknown > span { color: var(--muted); background: #f2f4f7; }
-.mode-breakdown { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 18px; }
-.mode-breakdown article { display: grid; grid-template-columns: auto auto; gap: 3px 10px; min-width: 210px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.mode-breakdown { display: grid; grid-template-columns: repeat(auto-fit,minmax(300px,1fr)); gap: 9px; margin: 12px 0 18px; }
+.mode-breakdown article { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 3px 10px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .mode-breakdown strong { color: var(--ink); font-size: 12px; }
-.mode-breakdown span { color: var(--primary); font-size: 11px; font-weight: 700; text-align: right; }
+.mode-breakdown span { overflow: hidden; color: var(--primary); font-size: 11px; font-weight: 700; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .mode-breakdown small { grid-column: 1 / -1; color: var(--subtle); font-size: 10px; }
 .raw-run { margin-top: 16px; padding: 0 14px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfe; }
 .raw-run summary { padding: 13px 0; cursor: pointer; color: var(--ink); font-weight: 700; }
@@ -339,11 +339,20 @@ button:disabled { opacity: .6; cursor: wait; }
 .evaluation-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .evaluation-header h2 { margin: 0; font-size: 17px; }
 .evaluation-header > div > p:last-child { max-width: 680px; margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
-.evaluation-metrics { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 8px; margin-top: 15px; }
+.evaluation-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; margin-top: 15px; }
 .evaluation-metrics article { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fafbfc; }
 .evaluation-metrics strong, .evaluation-metrics span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .evaluation-metrics strong { font-size: 15px; }
 .evaluation-metrics span { margin-top: 5px; color: var(--subtle); font-size: 8px; }
+.model-stage-section { margin-top: 20px; }
+.model-stage-breakdown { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 9px; }
+.model-stage-breakdown article { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(135deg,#fff 0%,#fafaff 100%); }
+.model-stage-breakdown article > div { display: flex; justify-content: space-between; gap: 12px; }
+.model-stage-breakdown strong { font-size: 13px; }
+.model-stage-breakdown span { color: var(--primary); font-size: 11px; font-weight: 700; }
+.model-stage-breakdown p { margin: 8px 0 3px; color: var(--ink); font-size: 12px; }
+.model-stage-breakdown small { color: var(--subtle); font-size: 10px; line-height: 1.5; }
+.model-stage-empty { grid-column: 1 / -1; margin: 0; padding: 13px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); background: #fafbfc; font-size: 12px; }
 .evaluation-grid { display: grid; grid-template-columns: minmax(280px,.75fr) minmax(520px,1.4fr); gap: 18px; margin-top: 20px; }
 .evaluation-grid > section { min-width: 0; }
 .quality-gates { display: grid; gap: 7px; }
@@ -355,7 +364,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .quality-gate p { margin: 3px 0 0; color: var(--subtle); font-size: 7px; line-height: 1.4; }
 .quality-gate > small { color: var(--muted); font-size: 7px; white-space: nowrap; }
 .evaluation-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; }
-.evaluation-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 8px; }
+.evaluation-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 8px; }
 .evaluation-table th, .evaluation-table td { padding: 9px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }
 .evaluation-table th { color: #697082; background: #f7f8fa; font-size: 7px; text-transform: uppercase; }
 .evaluation-table tr:last-child td { border-bottom: 0; }

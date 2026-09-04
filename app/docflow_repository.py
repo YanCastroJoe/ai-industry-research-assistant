@@ -622,7 +622,7 @@ class DocflowRepository:
         return {"id": row["id"], "title": row["title"], "status": "deleted"}
 
     def evaluation_summary(self, recent_limit: int = 8, session_id: str | None = None) -> dict:
-        """Aggregate persisted task outcomes into an auditable local AgentOps snapshot."""
+        """Aggregate persisted outcomes and model telemetry into an auditable snapshot."""
         with self._connect() as connection:
             if session_id is None:
                 rows = connection.execute("SELECT * FROM docflow_tasks ORDER BY updated_at DESC, id DESC").fetchall()
@@ -634,6 +634,7 @@ class DocflowRepository:
         tasks = [self._task_to_dict(row, include_source=False) for row in rows]
         evaluated = [task for task in tasks if task.get("result", {}).get("metrics")]
         reviewed = [task for task in tasks if task["status"] in {"approved", "rejected"}]
+        terminal = [task for task in tasks if task["status"] in {"awaiting_review", "approved", "rejected", "failed"}]
         latencies = sorted(int(task["result"]["metrics"].get("elapsed_ms", 0)) for task in evaluated)
 
         def rate(numerator: int, denominator: int) -> float | None:
@@ -644,6 +645,50 @@ class DocflowRepository:
                 return None
             index = max(0, math.ceil(len(values) * proportion) - 1)
             return values[index]
+
+        def execution(task: dict) -> dict:
+            return task.get("result", {}).get("execution", {})
+
+        def task_mode(task: dict) -> str:
+            result = task.get("result", {})
+            return str(execution(task).get("content_mode") or result.get("insights", {}).get("mode") or "unknown")
+
+        def telemetry_summary(group: list[dict]) -> dict:
+            group_latencies = sorted(int(task["result"]["metrics"].get("elapsed_ms", 0)) for task in group)
+            model_group = [task for task in group if int(execution(task).get("model_call_count", 0) or 0) > 0]
+            model_latencies = sorted(int(execution(task).get("model_latency_ms", 0) or 0) for task in model_group)
+            priced = [task for task in model_group if execution(task).get("estimated_cost") is not None]
+            currencies = {str(execution(task).get("cost_currency")) for task in priced if execution(task).get("cost_currency")}
+            cost_rate_labels = sorted({
+                str(execution(task).get("cost_rate_label"))
+                for task in priced
+                if execution(task).get("cost_rate_label")
+            })
+            model_calls = [
+                call
+                for task in model_group
+                for call in execution(task).get("model_calls", [])
+                if isinstance(call, dict)
+            ]
+            tokens = sum(int(execution(task).get("model_usage", {}).get("total_tokens", 0) or 0) for task in model_group)
+            return {
+                "task_count": len(group),
+                "latency_p50_ms": percentile(group_latencies, 0.50),
+                "latency_p95_ms": percentile(group_latencies, 0.95),
+                "model_latency_p50_ms": percentile(model_latencies, 0.50),
+                "model_latency_p95_ms": percentile(model_latencies, 0.95),
+                "degraded_task_rate": rate(sum(bool(execution(task).get("degraded")) for task in group), len(group)),
+                "retry_task_rate": rate(sum(int(task["result"]["metrics"].get("retry_count", 0)) > 0 for task in group), len(group)),
+                "model_path_complete_rate": rate(sum(bool(execution(task).get("model_path_complete")) for task in model_group), len(model_group)),
+                "model_call_count": len(model_calls),
+                "model_call_success_rate": rate(sum(call.get("status") == "succeeded" for call in model_calls), len(model_calls)),
+                "total_tokens": tokens,
+                "average_tokens_per_model_task": round(tokens / len(model_group), 2) if model_group else None,
+                "estimated_cost_total": round(sum(float(execution(task)["estimated_cost"]) for task in priced), 8) if priced else None,
+                "cost_coverage_rate": rate(len(priced), len(model_group)),
+                "cost_currency": currencies.pop() if len(currencies) == 1 else None,
+                "cost_rate_labels": cost_rate_labels,
+            }
 
         citation_passed = sum(bool(task["result"].get("verification", {}).get("passed")) for task in evaluated)
         content_quality_evaluated = [
@@ -657,17 +702,32 @@ class DocflowRepository:
         )
         tool_success_values = [float(task["result"]["metrics"].get("tool_success_rate", 0)) for task in evaluated]
         retry_tasks = sum(int(task["result"]["metrics"].get("retry_count", 0)) > 0 for task in evaluated)
-        failed_tasks = sum(task["status"] == "failed" for task in tasks)
+        failed_tasks = sum(task["status"] == "failed" for task in terminal)
         approved_tasks = sum(task["status"] == "approved" for task in reviewed)
         verifier_human_misses = sum(
             task["status"] == "rejected"
             and bool(task.get("result", {}).get("verification", {}).get("overall_passed"))
             for task in reviewed
         )
+        telemetry = telemetry_summary(evaluated)
+        model_tasks = [task for task in evaluated if int(execution(task).get("model_call_count", 0) or 0) > 0]
+        model_usage = {
+            key: sum(int(execution(task).get("model_usage", {}).get(key, 0) or 0) for task in model_tasks)
+            for key in (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens",
+            )
+        }
         metrics = {
             "task_count": len(tasks),
+            "terminal_count": len(terminal),
+            "successful_task_count": len(evaluated),
             "evaluated_count": len(evaluated),
             "reviewed_count": len(reviewed),
+            "execution_success_rate": rate(len(evaluated), len(terminal)),
             "citation_pass_rate": rate(citation_passed, len(evaluated)),
             "content_quality_pass_rate": rate(content_quality_passed, len(content_quality_evaluated)),
             "content_quality_evaluated_count": len(content_quality_evaluated),
@@ -676,22 +736,86 @@ class DocflowRepository:
             "verifier_human_miss_rate": rate(verifier_human_misses, len(reviewed)),
             "verifier_human_miss_count": verifier_human_misses,
             "retry_task_rate": rate(retry_tasks, len(evaluated)),
-            "failed_task_rate": rate(failed_tasks, len(tasks)),
+            "degraded_task_rate": telemetry["degraded_task_rate"],
+            "failed_task_rate": rate(failed_tasks, len(terminal)),
             "latency_p50_ms": percentile(latencies, 0.50),
             "latency_p95_ms": percentile(latencies, 0.95),
+            "model_latency_p50_ms": telemetry["model_latency_p50_ms"],
+            "model_latency_p95_ms": telemetry["model_latency_p95_ms"],
+            "model_task_count": len(model_tasks),
+            "model_call_count": telemetry["model_call_count"],
+            "model_call_success_rate": telemetry["model_call_success_rate"],
+            "model_usage": model_usage,
+            "average_tokens_per_model_task": telemetry["average_tokens_per_model_task"],
+            "estimated_cost_total": telemetry["estimated_cost_total"],
+            "cost_coverage_rate": telemetry["cost_coverage_rate"],
+            "cost_currency": telemetry["cost_currency"],
+            "cost_rate_labels": telemetry["cost_rate_labels"],
         }
         gate_specs = [
+            ("任务执行成功率", "execution_success_rate", ">=", 0.95, "只统计已进入终态的任务，不把排队或运行中任务算作失败"),
             ("引用通过率", "citation_pass_rate", ">=", 0.95, "生成结果中的 Evidence ID 可追溯"),
             ("内容质量通过率", "content_quality_pass_rate", ">=", 0.95, "负责人、日期、风险覆盖与汇报选材通过规则检查"),
             ("工具成功率", "tool_success_rate", ">=", 0.98, "计划内工具步骤成功完成"),
             ("失败任务率", "failed_task_rate", "<=", 0.05, "任务未因运行异常终止"),
-            ("P95 运行耗时", "latency_p95_ms", "<=", 3000, "本地规则演示链路阈值"),
         ]
         gates = []
         for name, key, operator, target, description in gate_specs:
             value = metrics[key]
             passed = None if value is None else (value >= target if operator == ">=" else value <= target)
             gates.append({"name": name, "metric": key, "value": value, "operator": operator, "target": target, "passed": passed, "description": description})
+
+        mode_breakdown = []
+        for mode in sorted({task_mode(task) for task in evaluated}):
+            group = [task for task in evaluated if task_mode(task) == mode]
+            mode_metrics = telemetry_summary(group)
+            mode_metrics.update(
+                {
+                    "mode": mode,
+                    "citation_pass_rate": rate(sum(bool(task["result"].get("verification", {}).get("passed")) for task in group), len(group)),
+                    "content_quality_pass_rate": rate(sum(bool(task["result"].get("verification", {}).get("content_quality_passed")) for task in group), len(group)),
+                }
+            )
+            mode_breakdown.append(mode_metrics)
+            latency_target = 15000 if mode == "model" else 3000
+            latency_value = mode_metrics["latency_p95_ms"]
+            gates.append(
+                {
+                    "name": f"{mode} P95 运行耗时",
+                    "metric": f"{mode}_latency_p95_ms",
+                    "value": latency_value,
+                    "operator": "<=",
+                    "target": latency_target,
+                    "passed": None if latency_value is None else latency_value <= latency_target,
+                    "description": "固定演示环境诊断阈值，不是生产 SLA",
+                }
+            )
+
+        model_calls = [
+            call
+            for task in model_tasks
+            for call in execution(task).get("model_calls", [])
+            if isinstance(call, dict)
+        ]
+        stage_breakdown = []
+        for stage in sorted({str(call.get("stage") or "unknown") for call in model_calls}):
+            calls = [call for call in model_calls if str(call.get("stage") or "unknown") == stage]
+            call_latencies = sorted(int(call.get("latency_ms", 0) or 0) for call in calls)
+            priced_calls = [call for call in calls if call.get("estimated_cost") is not None]
+            currencies = {str(call.get("cost_currency")) for call in priced_calls if call.get("cost_currency")}
+            stage_breakdown.append(
+                {
+                    "stage": stage,
+                    "call_count": len(calls),
+                    "success_rate": rate(sum(call.get("status") == "succeeded" for call in calls), len(calls)),
+                    "latency_p50_ms": percentile(call_latencies, 0.50),
+                    "latency_p95_ms": percentile(call_latencies, 0.95),
+                    "total_tokens": sum(int(call.get("usage", {}).get("total_tokens", 0) or 0) for call in calls),
+                    "estimated_cost_total": round(sum(float(call["estimated_cost"]) for call in priced_calls), 8) if priced_calls else None,
+                    "cost_coverage_rate": rate(len(priced_calls), len(calls)),
+                    "cost_currency": currencies.pop() if len(currencies) == 1 else None,
+                }
+            )
 
         recent = []
         for task in tasks[: max(1, min(recent_limit, 20))]:
@@ -706,8 +830,11 @@ class DocflowRepository:
                 issues.append("内容质量检查未通过")
             if int(run_metrics.get("retry_count", 0)) > 0:
                 issues.append(f"发生 {run_metrics['retry_count']} 次重试")
+            if bool(result.get("execution", {}).get("degraded")):
+                issues.append("模型路径降级")
             if task["status"] == "rejected":
                 issues.append("人工审核驳回")
+            task_execution = result.get("execution", {})
             recent.append(
                 {
                     "task_id": task["id"],
@@ -719,31 +846,26 @@ class DocflowRepository:
                     "retry_count": run_metrics.get("retry_count"),
                     "citation_passed": result.get("verification", {}).get("passed") if result else None,
                     "planner_mode": result.get("planner", {}).get("mode", ""),
-                    "execution_mode": result.get("execution", {}).get("content_mode", result.get("insights", {}).get("mode", "")),
+                    "execution_mode": task_execution.get("content_mode", result.get("insights", {}).get("mode", "")),
+                    "degraded": bool(task_execution.get("degraded")),
+                    "model_call_count": int(task_execution.get("model_call_count", 0) or 0),
+                    "model_latency_ms": task_execution.get("model_latency_ms"),
+                    "total_tokens": int(task_execution.get("model_usage", {}).get("total_tokens", 0) or 0),
+                    "estimated_cost": task_execution.get("estimated_cost"),
+                    "cost_currency": task_execution.get("cost_currency"),
+                    "cost_basis": task_execution.get("cost_basis", "unconfigured"),
+                    "cost_rate_label": task_execution.get("cost_rate_label", ""),
                     "issues": issues,
                 }
             )
-        mode_breakdown = []
-        for mode in sorted({task.get("result", {}).get("execution", {}).get("content_mode", task.get("result", {}).get("insights", {}).get("mode", "unknown")) for task in evaluated}):
-            group = [
-                task for task in evaluated
-                if task.get("result", {}).get("execution", {}).get("content_mode", task.get("result", {}).get("insights", {}).get("mode", "unknown")) == mode
-            ]
-            mode_breakdown.append(
-                {
-                    "mode": mode,
-                    "task_count": len(group),
-                    "citation_pass_rate": rate(sum(bool(task["result"].get("verification", {}).get("passed")) for task in group), len(group)),
-                    "content_quality_pass_rate": rate(sum(bool(task["result"].get("verification", {}).get("content_quality_passed")) for task in group), len(group)),
-                }
-            )
         return {
-            "scope": "local_task_history",
+            "scope": "session_task_history" if session_id is not None else "local_task_history",
             "metrics": metrics,
             "quality_gates": gates,
             "mode_breakdown": mode_breakdown,
+            "model_stage_breakdown": stage_breakdown,
             "recent_tasks": recent,
-            "notice": "指标来自当前 SQLite 任务历史，用于本地回归与演示，不代表生产环境准确率或 SLA。",
+            "notice": "指标仅来自当前访客 Session 的 SQLite 运行历史；成本只汇总已配置费率的调用，诊断阈值不是生产准确率或 SLA。",
         }
 
     def get_task(self, task_id: int) -> dict:

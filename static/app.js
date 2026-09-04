@@ -495,6 +495,15 @@ function formatEvaluationValue(metric, value) {
   return metric.includes('latency') ? `${value} ms` : formatRate(value);
 }
 
+function formatCost(value, currency) {
+  if (value === null || value === undefined) return '未配置单价';
+  return `${currency || ''} ${Number(value).toFixed(6)}`.trim();
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat('zh-CN').format(Number(value || 0));
+}
+
 function updateJobProgress(job) {
   const percent = Math.max(0, Math.min(100, Number(job.progress_percent || 0)));
   const labels = { queued: '任务排队中', running: 'Agent 正在执行', awaiting_review: '执行完成，等待审核', failed: '任务执行失败' };
@@ -528,22 +537,40 @@ async function pollJob(taskId) {
 async function loadEvaluationSummary() {
   const summary = await (await request('/api/docflow/evaluations/summary')).json();
   const metrics = summary.metrics || {};
+  const costCoverage = metrics.cost_coverage_rate === null || metrics.cost_coverage_rate === undefined
+    ? '无模型调用'
+    : `计价覆盖 ${formatRate(metrics.cost_coverage_rate)}`;
+  const rateLabel = metrics.cost_rate_labels?.length ? ` · ${metrics.cost_rate_labels.join(' / ')}` : '';
   const cards = [
-    [metrics.evaluated_count ?? 0, '有效任务样本'],
-    [formatRate(metrics.citation_pass_rate), '引用通过率'],
-    [formatRate(metrics.tool_success_rate), '工具成功率'],
-    [formatRate(metrics.approval_rate), '人工通过率'],
-    [metrics.latency_p95_ms === null ? '--' : `${metrics.latency_p95_ms} ms`, 'P95 运行耗时'],
+    [`${metrics.successful_task_count ?? 0}/${metrics.terminal_count ?? 0}`, '终态任务执行成功'],
+    [formatRate(metrics.execution_success_rate), '任务执行成功率'],
+    [formatRate(metrics.degraded_task_rate), '模型降级任务率'],
     [formatRate(metrics.retry_task_rate), '发生重试的任务'],
+    [formatRate(metrics.citation_pass_rate), '引用通过率'],
+    [formatRate(metrics.approval_rate), '人工通过率'],
     [metrics.verifier_human_miss_rate === null ? '--' : `${metrics.verifier_human_miss_count || 0} 条`, 'Verifier 通过但人工驳回'],
+    [metrics.latency_p50_ms === null ? '--' : `${metrics.latency_p50_ms} ms`, 'P50 运行耗时'],
+    [metrics.latency_p95_ms === null ? '--' : `${metrics.latency_p95_ms} ms`, 'P95 运行耗时'],
+    [formatInteger(metrics.model_usage?.total_tokens), '模型 Token 总量'],
+    [formatCost(metrics.estimated_cost_total, metrics.cost_currency), `已计价成本 · ${costCoverage}${rateLabel}`],
   ];
   document.querySelector('.evaluation-metrics').innerHTML = cards.map(([value, label]) => `<article><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></article>`).join('');
   const modeLabels = { model: '模型模式', rules: '本地规则', rules_fallback: '规则降级' };
   document.querySelector('.mode-breakdown').replaceChildren(...(summary.mode_breakdown || []).map((item) => {
     const card = document.createElement('article');
-    card.innerHTML = `<strong>${escapeHtml(modeLabels[item.mode] || item.mode)}</strong><span>${escapeHtml(String(item.task_count))} 个任务</span><small>引用 ${escapeHtml(formatRate(item.citation_pass_rate))} · 内容 ${escapeHtml(formatRate(item.content_quality_pass_rate))}</small>`;
+    const cost = formatCost(item.estimated_cost_total, item.cost_currency);
+    card.innerHTML = `<strong>${escapeHtml(modeLabels[item.mode] || item.mode)}</strong><span>${escapeHtml(String(item.task_count))} 个任务 · P50 ${escapeHtml(String(item.latency_p50_ms ?? '--'))} / P95 ${escapeHtml(String(item.latency_p95_ms ?? '--'))} ms</span><small>降级 ${escapeHtml(formatRate(item.degraded_task_rate))} · 重试 ${escapeHtml(formatRate(item.retry_task_rate))} · ${escapeHtml(formatInteger(item.total_tokens))} Tokens · ${escapeHtml(cost)}</small>`;
     return card;
   }));
+
+  const stageLabels = { planner: '规划阶段', content: '内容理解阶段' };
+  const stageItems = summary.model_stage_breakdown || [];
+  document.querySelector('.model-stage-breakdown').replaceChildren(...(stageItems.length ? stageItems.map((item) => {
+    const card = document.createElement('article');
+    const coverage = item.cost_coverage_rate === null || item.cost_coverage_rate === undefined ? '--' : formatRate(item.cost_coverage_rate);
+    card.innerHTML = `<div><strong>${escapeHtml(stageLabels[item.stage] || item.stage)}</strong><span>${escapeHtml(String(item.call_count))} 次调用 · 成功 ${escapeHtml(formatRate(item.success_rate))}</span></div><p>P50 ${escapeHtml(String(item.latency_p50_ms ?? '--'))} ms · P95 ${escapeHtml(String(item.latency_p95_ms ?? '--'))} ms</p><small>${escapeHtml(formatInteger(item.total_tokens))} Tokens · ${escapeHtml(formatCost(item.estimated_cost_total, item.cost_currency))} · 计价覆盖 ${escapeHtml(coverage)}</small>`;
+    return card;
+  }) : [Object.assign(document.createElement('p'), { className: 'model-stage-empty', textContent: '当前 Session 尚无真实模型调用；运行模型任务后显示 Planner 与内容理解阶段诊断。' })]));
 
   const gateHost = document.querySelector('.quality-gates');
   gateHost.replaceChildren(...(summary.quality_gates || []).map((gate) => {
@@ -559,7 +586,11 @@ async function loadEvaluationSummary() {
   tableBody.replaceChildren(...(summary.recent_tasks || []).map((task) => {
     const row = document.createElement('tr');
     const issues = task.issues?.length ? task.issues.join('；') : '无异常';
-    row.innerHTML = `<td><button type="button" class="evaluation-task-link">${escapeHtml(task.title)}</button><small>#${escapeHtml(String(task.task_id))} · ${escapeHtml(modeLabels[task.execution_mode] || task.execution_mode || task.planner_mode || '未执行')}</small></td><td><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span></td><td>${task.elapsed_ms === null || task.elapsed_ms === undefined ? '--' : `${escapeHtml(String(task.elapsed_ms))} ms`}</td><td>${task.citation_passed === null || task.citation_passed === undefined ? '--' : task.citation_passed ? '通过' : '未通过'}</td><td class="${task.issues?.length ? 'diagnostic-warning' : 'diagnostic-ok'}">${escapeHtml(issues)}</td>`;
+    const mode = modeLabels[task.execution_mode] || task.execution_mode || task.planner_mode || '未执行';
+    const modelUsage = task.model_call_count
+      ? `${task.model_call_count} 次 · ${formatInteger(task.total_tokens)} Tokens<br><small>${task.model_latency_ms ?? '--'} ms · ${formatCost(task.estimated_cost, task.cost_currency)}</small>`
+      : '无模型调用';
+    row.innerHTML = `<td><button type="button" class="evaluation-task-link">${escapeHtml(task.title)}</button><small>#${escapeHtml(String(task.task_id))} · ${escapeHtml(task.updated_at || '')}</small></td><td><span class="run-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] || task.status)}</span></td><td>${escapeHtml(mode)}</td><td>${task.elapsed_ms === null || task.elapsed_ms === undefined ? '--' : `${escapeHtml(String(task.elapsed_ms))} ms`}</td><td>${modelUsage}</td><td class="${task.issues?.length ? 'diagnostic-warning' : 'diagnostic-ok'}">${escapeHtml(issues)}</td>`;
     row.querySelector('.evaluation-task-link').addEventListener('click', async () => {
       renderTask(await (await request(`/api/docflow/tasks/${task.task_id}`)).json());
       activateMainView('workspace-view');
@@ -744,7 +775,7 @@ function renderTask(task) {
     const callStages = modelCalls.map((call) => `${call.stage || 'unknown'}:${call.status || 'unknown'}`).join(' · ');
     const costText = execution.estimated_cost === null || execution.estimated_cost === undefined
       ? '成本未配置费率'
-      : `估算成本 ${execution.cost_currency || ''} ${Number(execution.estimated_cost).toFixed(6)}`.trim();
+      : `估算成本 ${execution.cost_currency || ''} ${Number(execution.estimated_cost).toFixed(6)}${execution.cost_rate_label ? `（${execution.cost_rate_label}）` : ''}`.trim();
     modelCallSummary.hidden = false;
     modelCallSummary.textContent = `真实模型调用：${callStages} · 模型 ${modelNames} · ${usage.total_tokens || 0} Tokens · 模型耗时 ${execution.model_latency_ms || 0} ms · ${costText}`;
   }

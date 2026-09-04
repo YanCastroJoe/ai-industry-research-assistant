@@ -26,12 +26,23 @@ GOAL = "生成项目周报、风险清单和三页汇报大纲"
 
 
 class FakeResponse:
-    def __init__(self, content, *, request_id, prompt_tokens, completion_tokens):
+    def __init__(
+        self,
+        content,
+        *,
+        request_id,
+        prompt_tokens,
+        completion_tokens,
+        prompt_cache_hit_tokens=None,
+        prompt_cache_miss_tokens=None,
+    ):
         self.content = content
         self.headers = {"x-request-id": request_id}
         self.request_id = request_id
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.prompt_cache_hit_tokens = prompt_cache_hit_tokens
+        self.prompt_cache_miss_tokens = prompt_cache_miss_tokens
 
     def __enter__(self):
         return self
@@ -40,16 +51,21 @@ class FakeResponse:
         return False
 
     def read(self):
+        usage = {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
+        if self.prompt_cache_hit_tokens is not None:
+            usage["prompt_cache_hit_tokens"] = self.prompt_cache_hit_tokens
+        if self.prompt_cache_miss_tokens is not None:
+            usage["prompt_cache_miss_tokens"] = self.prompt_cache_miss_tokens
         return json.dumps(
             {
                 "id": self.request_id,
                 "model": "deepseek-chat",
                 "choices": [{"message": {"content": json.dumps(self.content, ensure_ascii=False)}}],
-                "usage": {
-                    "prompt_tokens": self.prompt_tokens,
-                    "completion_tokens": self.completion_tokens,
-                    "total_tokens": self.prompt_tokens + self.completion_tokens,
-                },
+                "usage": usage,
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -76,6 +92,15 @@ def model_responses():
         FakeResponse(planner, request_id="planner-request", prompt_tokens=100, completion_tokens=20),
         FakeResponse(content, request_id="content-request", prompt_tokens=200, completion_tokens=40),
     ]
+
+
+def model_responses_with_cache():
+    responses = model_responses()
+    responses[0].prompt_cache_hit_tokens = 40
+    responses[0].prompt_cache_miss_tokens = 60
+    responses[1].prompt_cache_hit_tokens = 150
+    responses[1].prompt_cache_miss_tokens = 50
+    return responses
 
 
 class ModelRuntimeTests(unittest.TestCase):
@@ -261,6 +286,30 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertEqual(model_runtime_status(True)["model_reachability"], "reachable")
         self.assertTrue(result["verification"]["overall_passed"])
 
+    def test_cache_aware_usage_and_cost_are_recorded_without_flat_input_guess(self):
+        environment = {
+            "MODEL_API_KEY": "unit-test-secret",
+            "MODEL_INPUT_COST_PER_MILLION": "",
+            "MODEL_INPUT_CACHE_HIT_COST_PER_MILLION": "1",
+            "MODEL_INPUT_CACHE_MISS_COST_PER_MILLION": "3",
+            "MODEL_OUTPUT_COST_PER_MILLION": "5",
+            "MODEL_COST_CURRENCY": "USD",
+            "MODEL_COST_RATE_LABEL": "test-cache-rates",
+        }
+        with patch.dict("os.environ", environment, clear=False), patch(
+            "urllib.request.urlopen", side_effect=model_responses_with_cache()
+        ):
+            result = AgentRuntime().execute(GOAL, SOURCE)
+
+        execution = result["execution"]
+        self.assertEqual(execution["model_usage"]["prompt_cache_hit_tokens"], 190)
+        self.assertEqual(execution["model_usage"]["prompt_cache_miss_tokens"], 110)
+        self.assertTrue(execution["model_usage"]["cache_metrics_available"])
+        self.assertEqual(execution["cost_basis"], "provider_cache_split")
+        self.assertEqual(execution["cost_currency"], "USD")
+        self.assertEqual(execution["cost_rate_label"], "test-cache-rates")
+        self.assertAlmostEqual(execution["estimated_cost"], 0.00082)
+
     def test_model_failure_is_labeled_and_falls_back_without_false_model_claim(self):
         with patch.dict("os.environ", {"MODEL_API_KEY": "unit-test-secret"}, clear=False), patch(
             "urllib.request.urlopen", side_effect=urllib.error.URLError("network unavailable")
@@ -308,6 +357,72 @@ class ModelRuntimeTests(unittest.TestCase):
             run = completed["runs"][0]
             self.assertEqual(run["token_estimate"], 321)
             self.assertAlmostEqual(run["cost_estimate"], 0.0123)
+
+    def test_agentops_summarizes_model_stages_cost_coverage_and_terminal_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = DocflowRepository(Path(directory) / "m3-agentops.db")
+            first = repository.create_task("模型诊断任务", GOAL, SOURCE, "m3-session")
+            first_run = repository.create_run(first["id"])
+            result = {
+                "execution": {
+                    "content_mode": "model",
+                    "degraded": False,
+                    "model_path_complete": True,
+                    "model_call_count": 2,
+                    "model_latency_ms": 4800,
+                    "model_usage": {
+                        "prompt_tokens": 300,
+                        "completion_tokens": 100,
+                        "total_tokens": 400,
+                        "prompt_cache_hit_tokens": 80,
+                        "prompt_cache_miss_tokens": 220,
+                    },
+                    "estimated_cost": 0.001,
+                    "cost_currency": "USD",
+                    "cost_basis": "provider_cache_split",
+                    "model_calls": [
+                        {
+                            "stage": "planner",
+                            "status": "succeeded",
+                            "latency_ms": 1800,
+                            "usage": {"total_tokens": 150},
+                            "estimated_cost": 0.0004,
+                            "cost_currency": "USD",
+                        },
+                        {
+                            "stage": "content",
+                            "status": "succeeded",
+                            "latency_ms": 3000,
+                            "usage": {"total_tokens": 250},
+                            "estimated_cost": 0.0006,
+                            "cost_currency": "USD",
+                        },
+                    ],
+                },
+                "metrics": {"elapsed_ms": 5000, "retry_count": 0, "tool_success_rate": 1.0},
+                "verification": {"passed": True, "content_quality_passed": True},
+            }
+            repository.complete_run(first["id"], first_run, build_rule_plan(GOAL), result)
+
+            failed = repository.create_task("失败任务", GOAL, SOURCE, "m3-session")
+            failed_run = repository.create_run(failed["id"])
+            repository.fail_run(failed["id"], failed_run, "synthetic failure")
+
+            summary = repository.evaluation_summary(session_id="m3-session")
+
+            self.assertEqual(summary["metrics"]["terminal_count"], 2)
+            self.assertEqual(summary["metrics"]["execution_success_rate"], 0.5)
+            self.assertEqual(summary["metrics"]["failed_task_rate"], 0.5)
+            self.assertEqual(summary["metrics"]["model_call_count"], 2)
+            self.assertEqual(summary["metrics"]["model_usage"]["total_tokens"], 400)
+            self.assertEqual(summary["metrics"]["estimated_cost_total"], 0.001)
+            self.assertEqual(summary["metrics"]["cost_coverage_rate"], 1.0)
+            self.assertEqual(summary["metrics"]["cost_currency"], "USD")
+            self.assertEqual(
+                {item["stage"] for item in summary["model_stage_breakdown"]},
+                {"planner", "content"},
+            )
+            self.assertTrue(any(gate["name"] == "model P95 运行耗时" for gate in summary["quality_gates"]))
 
     def test_portable_acceptance_rejects_fallback_and_accepts_complete_model_evidence(self):
         task = {
@@ -360,6 +475,27 @@ class ModelRuntimeTests(unittest.TestCase):
         task["result"]["execution"]["fallback_reasons"] = ["planner unavailable"]
         with self.assertRaises(CHECK_MODEL_RUNTIME.AcceptanceError):
             CHECK_MODEL_RUNTIME.validate_model_run(task)
+
+    def test_portable_acceptance_requires_m3_agentops_stage_telemetry(self):
+        summary = {
+            "metrics": {
+                "terminal_count": 1,
+                "execution_success_rate": 1.0,
+                "model_task_count": 1,
+                "model_call_count": 2,
+                "model_usage": {"total_tokens": 420},
+                "latency_p50_ms": 5000,
+                "latency_p95_ms": 5000,
+                "cost_coverage_rate": 1.0,
+                "estimated_cost_total": 0.001,
+            },
+            "model_stage_breakdown": [{"stage": "planner"}, {"stage": "content"}],
+        }
+
+        self.assertEqual(CHECK_MODEL_RUNTIME.validate_agentops_summary(summary)["model_call_count"], 2)
+        summary["model_stage_breakdown"] = [{"stage": "planner"}]
+        with self.assertRaises(CHECK_MODEL_RUNTIME.AcceptanceError):
+            CHECK_MODEL_RUNTIME.validate_agentops_summary(summary)
 
     def test_portable_acceptance_rejects_missing_required_source_fact(self):
         task = {

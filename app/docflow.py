@@ -1396,10 +1396,21 @@ class AgentRuntime:
         model_calls = [call for call in (planner_model_call, content_model_call) if isinstance(call, dict)]
         model_usage = {
             key: sum(int(call.get("usage", {}).get(key, 0) or 0) for call in model_calls)
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            for key in (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens",
+            )
         }
+        model_usage["cache_metrics_available"] = bool(model_calls) and all(
+            bool(call.get("usage", {}).get("cache_metrics_available")) for call in model_calls
+        )
         priced_calls = [float(call["estimated_cost"]) for call in model_calls if call.get("estimated_cost") is not None]
         estimated_cost = round(sum(priced_calls), 8) if len(priced_calls) == len(model_calls) and model_calls else None
+        cost_bases = {str(call.get("cost_basis") or "unconfigured") for call in model_calls}
+        cost_basis = cost_bases.pop() if len(cost_bases) == 1 else ("mixed" if cost_bases else "unconfigured")
         successful_model_calls = sum(call.get("status") == "succeeded" for call in model_calls)
         failed_model_calls = len(model_calls) - successful_model_calls
         fallback_reasons = list(dict.fromkeys(
@@ -1426,6 +1437,8 @@ class AgentRuntime:
                 "model_usage": model_usage,
                 "estimated_cost": estimated_cost,
                 "cost_currency": next((str(call.get("cost_currency")) for call in model_calls if call.get("cost_currency")), None),
+                "cost_basis": cost_basis,
+                "cost_rate_label": next((str(call.get("cost_rate_label")) for call in model_calls if call.get("cost_rate_label")), ""),
             },
             "memory": {
                 "items_used": memory_application["applied"],
@@ -1457,6 +1470,8 @@ class AgentRuntime:
                 "prompt_tokens": model_usage["prompt_tokens"],
                 "completion_tokens": model_usage["completion_tokens"],
                 "total_tokens": model_usage["total_tokens"],
+                "prompt_cache_hit_tokens": model_usage["prompt_cache_hit_tokens"],
+                "prompt_cache_miss_tokens": model_usage["prompt_cache_miss_tokens"],
                 "estimated_cost": estimated_cost,
             },
         }

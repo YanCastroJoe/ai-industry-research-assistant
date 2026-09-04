@@ -19,7 +19,10 @@ class ReleaseConfigurationTests(unittest.TestCase):
         self.assertIn("DOCFLOW_DEMO_PASSWORD is required", compose)
         self.assertIn("DOCFLOW_RATE_LIMIT_PER_MINUTE", compose)
         self.assertIn("MODEL_INPUT_COST_PER_MILLION", compose)
+        self.assertIn("MODEL_INPUT_CACHE_HIT_COST_PER_MILLION", compose)
+        self.assertIn("MODEL_INPUT_CACHE_MISS_COST_PER_MILLION", compose)
         self.assertIn("MODEL_OUTPUT_COST_PER_MILLION", compose)
+        self.assertIn("MODEL_COST_RATE_LABEL", compose)
 
     def test_environment_template_contains_no_real_secret(self):
         example = (ROOT / ".env.example").read_text(encoding="utf-8")
@@ -27,6 +30,9 @@ class ReleaseConfigurationTests(unittest.TestCase):
         self.assertIn("DOCFLOW_BIND_ADDRESS=127.0.0.1", example)
         self.assertIn("DOCFLOW_DEMO_PASSWORD=", example)
         self.assertIn("MODEL_COST_CURRENCY=CNY", example)
+        self.assertIn("MODEL_INPUT_CACHE_HIT_COST_PER_MILLION=", example)
+        self.assertIn("MODEL_INPUT_CACHE_MISS_COST_PER_MILLION=", example)
+        self.assertIn("MODEL_COST_RATE_LABEL=", example)
 
     def test_readme_publishes_protected_demo_without_secret(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
