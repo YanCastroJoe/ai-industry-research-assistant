@@ -424,7 +424,7 @@ def _extract_owner_due(text: str) -> tuple[str, str]:
     invalid_owner_terms = {
         "项目组", "目标", "计划于", "计划在", "将在", "需在", "会议结论", "评审结论",
         "行动", "风险", "问题", "项目本", "项目经理提出", "提供这两项风险的", "计划",
-        "本周进展", "进展", "背景", "项目", "结论", "下一步", "里程碑",
+        "本周进展", "进展", "背景", "项目", "结论", "下一步", "里程碑", "补充记录",
     }
     if owner in invalid_owner_terms or owner.endswith(("结论", "在", "要在", "提出", "这")):
         owner = "待确认"
@@ -776,25 +776,106 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
     # A model may shorten an otherwise supported date (for example 周五前 -> 周五).
     # Labels in the source are authoritative, so restore the exact owner and due
     # value when one cited Evidence item maps to one explicit risk/action.
-    requirements = _explicit_source_requirements([
+    # Treat the deterministic parser as a schema/grounding guard, not as a
+    # second author. Every source-backed risk/action with an explicit owner or
+    # deadline must survive model summarisation exactly. Model-only additions
+    # may remain when they are independently grounded and non-duplicative.
+    explicit_requirements = _explicit_source_requirements([
         {"id": fact["citation"], "excerpt": fact["claim"]} for fact in facts
     ])
-    for collection, kind in (("risks", "risk"), ("actions", "action")):
-        for item in insights.get(collection, []):
-            cited = set(item.get("evidence_ids", []))
-            matches = [
-                requirement
-                for requirement in requirements
-                if requirement["kind"] == kind and requirement["citation"] in cited
-            ]
-            if len(matches) != 1:
+
+    def merge_required(collection: str, text_key: str) -> list[dict[str, Any]]:
+        fallback_risk_citations = {
+            citation
+            for item in fallback.get("risks", [])
+            for citation in item.get("evidence_ids", [])
+        }
+        canonical = [
+            item for item in fallback.get(collection, [])
+            if item.get("evidence_ids")
+            and not (
+                collection == "actions"
+                and fallback_risk_citations.intersection(item.get("evidence_ids", []))
+            )
+        ]
+        model_items = list(insights.get(collection, []))
+        merged: list[dict[str, Any]] = []
+        consumed: set[int] = set()
+        for required in canonical:
+            required_citations = set(required.get("evidence_ids", []))
+            explicit = next(
+                (
+                    item for item in explicit_requirements
+                    if item["kind"] == ("risk" if collection == "risks" else "action")
+                    and item["citation"] in required_citations
+                ),
+                None,
+            )
+            candidate_index = next(
+                (
+                    index for index, item in enumerate(model_items)
+                    if index not in consumed
+                    and required_citations.intersection(item.get("evidence_ids", []))
+                    and (
+                        collection == "actions"
+                        or not _risk_topic(item.get(text_key, ""))
+                        or _risk_topic(item.get(text_key, "")) == _risk_topic(required.get(text_key, ""))
+                    )
+                ),
+                None,
+            )
+            if candidate_index is None:
+                restored = dict(required)
+                if explicit:
+                    restored[text_key] = explicit["content"]
+                    if explicit["owner"] != "待确认":
+                        restored["owner"] = explicit["owner"]
+                    if explicit["due"] != "待确认":
+                        restored["due"] = explicit["due"]
+                merged.append(restored)
                 continue
-            requirement = matches[0]
-            item["risk" if kind == "risk" else "content"] = requirement["content"]
-            if requirement["owner"] != "待确认":
-                item["owner"] = requirement["owner"]
-            if requirement["due"] != "待确认":
-                item["due"] = requirement["due"]
+            consumed.add(candidate_index)
+            candidate = dict(model_items[candidate_index])
+            candidate[text_key] = explicit["content"] if explicit else required[text_key]
+            candidate["evidence_ids"] = list(dict.fromkeys(required.get("evidence_ids", []) + candidate.get("evidence_ids", [])))
+            if required.get("owner") != "待确认":
+                candidate["owner"] = required["owner"]
+            if required.get("due") != "待确认":
+                candidate["due"] = required["due"]
+            if explicit and explicit["owner"] != "待确认":
+                candidate["owner"] = explicit["owner"]
+            if explicit and explicit["due"] != "待确认":
+                candidate["due"] = explicit["due"]
+            merged.append(candidate)
+        for index, item in enumerate(model_items):
+            if index in consumed:
+                continue
+            citations = set(item.get("evidence_ids", []))
+            duplicate = any(
+                citations.intersection(existing.get("evidence_ids", []))
+                and _compact_business_text(item.get(text_key, "")) == _compact_business_text(existing.get(text_key, ""))
+                for existing in merged
+            )
+            if not duplicate:
+                merged.append(item)
+        if collection == "risks":
+            merged.sort(key=_risk_priority, reverse=True)
+        return merged[:6]
+
+    insights["risks"] = merge_required("risks", "risk")
+    insights["actions"] = merge_required("actions", "content")
+
+    # Never echo the body of a prompt-injection attempt into user artifacts.
+    # Preserve only a neutral audit message and the source citation.
+    security_citations = list(dict.fromkeys(
+        citation
+        for item in fallback.get("security_flags", []) + insights.get("security_flags", [])
+        for citation in item.get("evidence_ids", [])
+    ))
+    insights["security_flags"] = ([{
+        "content": "检测到材料中的越权指令，已按不可信文本隔离，未参与规划、摘要或导出决策。",
+        "evidence_ids": security_citations,
+    }] if security_citations else [])
     return insights
 
 

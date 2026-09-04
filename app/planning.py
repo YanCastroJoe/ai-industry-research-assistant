@@ -146,6 +146,56 @@ def normalize_model_plan(raw_plan: Any) -> Any:
     return normalized
 
 
+def compile_model_plan(raw_plan: Any, goal: str, allowed_tools: set[str]) -> list[dict[str, str]]:
+    """Compile a model proposal onto DocFlow's mandatory, allow-listed skeleton.
+
+    The model may decide which optional deliverables are useful and may phrase
+    their purposes, but it must not be able to remove or reorder the safety
+    dependencies. Missing mandatory steps are restored locally instead of
+    turning harmless model omissions into a full planner fallback.
+    """
+    normalized = normalize_model_plan(raw_plan)
+    if not isinstance(normalized, list) or not normalized:
+        raise PlanValidationError("plan must be a non-empty list")
+    if len(normalized) > 8:
+        raise PlanValidationError("plan exceeds the eight-step execution limit")
+
+    proposed: dict[str, dict[str, str]] = {}
+    for index, raw_step in enumerate(normalized, start=1):
+        if not isinstance(raw_step, dict):
+            raise PlanValidationError(f"step {index} is not an object")
+        tool_name = str(raw_step.get("tool_name", "")).strip()
+        if tool_name not in allowed_tools:
+            raise PlanValidationError(f"step {index} uses unknown tool: {tool_name}")
+        if tool_name in proposed:
+            raise PlanValidationError("duplicate tool calls are not allowed in the V2 workflow")
+        if tool_name not in set(REQUIRED_PREFIX) | OPTIONAL_DELIVERABLES | {REQUIRED_SUFFIX}:
+            raise PlanValidationError(f"unsupported optional tool: {tool_name}")
+        purpose = str(raw_step.get("purpose", "")).strip()[:120]
+        if not purpose:
+            raise PlanValidationError(f"step {index} has no purpose")
+        proposed[tool_name] = {
+            "phase": TOOL_PHASES[tool_name],
+            "tool_name": tool_name,
+            "purpose": purpose,
+        }
+
+    baseline = build_rule_plan(goal)
+    baseline_by_tool = {step["tool_name"]: step for step in baseline}
+    optional_tools = {
+        name for name in proposed if name in OPTIONAL_DELIVERABLES
+    } | {
+        step["tool_name"] for step in baseline if step["tool_name"] in OPTIONAL_DELIVERABLES
+    }
+    ordered_tools = [*REQUIRED_PREFIX]
+    ordered_tools.extend(name for name in ("generate_risk_register", "generate_slide_outline") if name in optional_tools)
+    ordered_tools.append(REQUIRED_SUFFIX)
+    compiled = [proposed.get(name, baseline_by_tool.get(name)) for name in ordered_tools]
+    if any(step is None for step in compiled):
+        raise PlanValidationError("planner skeleton could not be compiled")
+    return validate_plan(compiled, allowed_tools)
+
+
 class RulePlanner:
     def create_plan(self, goal: str, tools: list[dict[str, Any]]) -> PlannerDecision:
         allowed_tools = {str(tool["name"]) for tool in tools}
@@ -195,7 +245,7 @@ class OpenAICompatiblePlanner:
                 timeout=20,
             )
             raw_plan = _extract_json_object(content).get("plan")
-            plan = validate_plan(normalize_model_plan(raw_plan), allowed_tools)
+            plan = compile_model_plan(raw_plan, goal, allowed_tools)
             return PlannerDecision(plan, mode="model", model_call=model_call)
         except ModelCallError as error:
             raise PlanValidationError(str(error), model_call=error.telemetry) from error

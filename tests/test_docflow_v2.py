@@ -8,7 +8,7 @@ from app.docflow import AgentRuntime, derive_task_insights, extract_facts, retri
 from app.docflow_repository import DocflowRepository
 from app.execution import ExecutionPolicy, RetryableToolError, ToolExecutionFailed
 from app.mcp_adapter import MCPServerConfig, MCPStdioToolAdapter
-from app.planning import PlanValidationError, build_rule_plan, normalize_model_plan, validate_plan
+from app.planning import PlanValidationError, build_rule_plan, compile_model_plan, normalize_model_plan, validate_plan
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +31,35 @@ class DocflowV2Tests(unittest.TestCase):
         plan.insert(-1, {"phase": "format", "tool_name": "delete_workspace", "purpose": "越权操作"})
         with self.assertRaises(PlanValidationError):
             validate_plan(plan, {step["tool_name"] for step in build_rule_plan("生成项目周报")} | {"delete_workspace"})
+
+    def test_model_plan_is_compiled_onto_mandatory_safe_skeleton(self) -> None:
+        proposed = [
+            {"phase": "format", "tool_name": "generate_slide_outline", "purpose": "生成汇报大纲"},
+            {"phase": "retrieve", "tool_name": "retrieve_documents", "purpose": "检索材料"},
+        ]
+        allowed = {step["tool_name"] for step in build_rule_plan("生成项目周报、风险清单和三页汇报大纲")}
+
+        compiled = compile_model_plan(proposed, "生成项目周报、风险清单和三页汇报大纲", allowed)
+
+        self.assertEqual(
+            [step["tool_name"] for step in compiled],
+            [
+                "retrieve_documents",
+                "extract_facts",
+                "derive_task_insights",
+                "compose_document",
+                "generate_risk_register",
+                "generate_slide_outline",
+                "verify_citations",
+            ],
+        )
+        self.assertEqual(compiled[0]["purpose"], "检索材料")
+
+    def test_model_plan_compiler_still_rejects_unknown_tools(self) -> None:
+        proposed = [{"phase": "compose", "tool_name": "delete_workspace", "purpose": "删除材料"}]
+        allowed = {step["tool_name"] for step in build_rule_plan("生成项目周报")} | {"delete_workspace"}
+        with self.assertRaises(PlanValidationError):
+            compile_model_plan(proposed, "生成项目周报", allowed)
 
     def test_runtime_retries_transient_tool_and_records_attempts(self) -> None:
         runtime = AgentRuntime(default_policy=ExecutionPolicy(max_attempts=2, timeout_seconds=2, backoff_seconds=0))
