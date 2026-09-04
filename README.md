@@ -106,7 +106,7 @@ flowchart TD
 - 云端隔离实例与正式实例分别通过一次强制模型验收：Planner 和内容生成均返回提供方请求 ID、Token 与模型耗时，未发生规则降级；审核前导出受阻，审核通过后导出成功。
 - 公网入口未认证返回 HTTP 401，认证后首页与 `/ready` 均返回 HTTP 200。
 
-上述结果只代表当前固定合成回归集，不代表生产准确率。详细口径见 [评测报告](evaluation/reports/docflow-v2-2026-08-07.md)。
+上述结果只代表当前固定合成回归集和小样本部署验收，不代表生产准确率或 SLA。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md) 与 [真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md)。
 
 ## 本地复现
 
