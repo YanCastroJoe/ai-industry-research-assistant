@@ -720,6 +720,28 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
                 item["due"] = "待确认"
             if collection == "risks" and item.get("impact") and not _field_supported(item["impact"], evidence_text):
                 item["impact"] = "影响待确认"
+
+    # A model may shorten an otherwise supported date (for example 周五前 -> 周五).
+    # Labels in the source are authoritative, so restore the exact owner and due
+    # value when one cited Evidence item maps to one explicit risk/action.
+    requirements = _explicit_source_requirements([
+        {"id": fact["citation"], "excerpt": fact["claim"]} for fact in facts
+    ])
+    for collection, kind in (("risks", "risk"), ("actions", "action")):
+        for item in insights.get(collection, []):
+            cited = set(item.get("evidence_ids", []))
+            matches = [
+                requirement
+                for requirement in requirements
+                if requirement["kind"] == kind and requirement["citation"] in cited
+            ]
+            if len(matches) != 1:
+                continue
+            requirement = matches[0]
+            if requirement["owner"] != "待确认":
+                item["owner"] = requirement["owner"]
+            if requirement["due"] != "待确认":
+                item["due"] = requirement["due"]
     return insights
 
 

@@ -6,7 +6,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from app.docflow import AgentRuntime, extract_facts, retrieve_documents
+from app.docflow import AgentRuntime, _enforce_grounded_fields, extract_facts, retrieve_documents
 from app.docflow_repository import DocflowRepository
 from app.model_client import model_runtime_status
 from app.planning import build_rule_plan
@@ -79,6 +79,44 @@ def model_responses():
 
 
 class ModelRuntimeTests(unittest.TestCase):
+    def test_explicit_source_deadlines_override_model_shortening(self):
+        facts = [
+            {
+                "citation": "E1",
+                "claim": "风险：退款政策文档仍有两个版本，负责人李明需在周五前确认最终口径。",
+            },
+            {
+                "citation": "E2",
+                "claim": "行动：王芳负责补充退货运费边界案例，下周二完成回归测试。",
+            },
+        ]
+        insights = {
+            "risks": [
+                {
+                    "risk": "退款政策存在两个版本",
+                    "impact": "影响待确认",
+                    "owner": "李明",
+                    "due": "周五",
+                    "evidence_ids": ["E1"],
+                }
+            ],
+            "actions": [
+                {
+                    "content": "补充退货运费边界案例",
+                    "owner": "王芳",
+                    "due": "下周二",
+                    "evidence_ids": ["E2"],
+                }
+            ],
+        }
+
+        grounded = _enforce_grounded_fields(insights, facts)
+
+        self.assertEqual(grounded["risks"][0]["due"], "周五前")
+        self.assertEqual(grounded["risks"][0]["owner"], "李明")
+        self.assertEqual(grounded["actions"][0]["due"], "下周二")
+        self.assertEqual(grounded["actions"][0]["owner"], "王芳")
+
     def test_real_model_path_records_two_calls_tokens_cost_and_request_ids(self):
         environment = {
             "MODEL_API_KEY": "unit-test-secret",
