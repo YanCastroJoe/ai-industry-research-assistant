@@ -146,6 +146,13 @@ class ModelRuntimeTests(unittest.TestCase):
             "status": "awaiting_review",
             "result": {
                 "verification": {"overall_passed": True},
+                "artifacts": {
+                    "weekly_report_markdown": (
+                        "风险：退款政策文档仍有两个版本；负责人：李明；截止：周五前 [E1]\n"
+                        "行动：王芳负责补充边界案例 [E2]"
+                    )
+                },
+                "evidence": [{"id": "E1"}, {"id": "E2"}],
                 "execution": {
                     "model_path_complete": True,
                     "model_call_count": 2,
@@ -165,6 +172,27 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertTrue(CHECK_MODEL_RUNTIME.validate_model_run(task)["model_path_complete"])
         task["result"]["execution"]["model_path_complete"] = False
         task["result"]["execution"]["fallback_reasons"] = ["planner unavailable"]
+        with self.assertRaises(CHECK_MODEL_RUNTIME.AcceptanceError):
+            CHECK_MODEL_RUNTIME.validate_model_run(task)
+
+    def test_portable_acceptance_rejects_missing_required_source_fact(self):
+        task = {
+            "status": "awaiting_review",
+            "result": {
+                "verification": {"overall_passed": True},
+                "artifacts": {"weekly_report_markdown": "项目正常推进 [E1]"},
+                "evidence": [{"id": "E1"}],
+                "execution": {
+                    "model_path_complete": True,
+                    "model_call_count": 2,
+                    "model_usage": {"total_tokens": 120},
+                    "model_calls": [
+                        {"stage": "planner", "status": "succeeded", "request_id": "req-1"},
+                        {"stage": "content", "status": "succeeded", "request_id": "req-2"},
+                    ],
+                },
+            },
+        }
         with self.assertRaises(CHECK_MODEL_RUNTIME.AcceptanceError):
             CHECK_MODEL_RUNTIME.validate_model_run(task)
 

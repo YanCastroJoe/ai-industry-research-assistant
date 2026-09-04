@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -57,6 +58,23 @@ def validate_model_run(task: dict[str, Any]) -> dict[str, Any]:
     failed = [str(call.get("stage") or "unknown") for call in calls if call.get("status") != "succeeded"]
     if failed:
         raise AcceptanceError(f"model call did not succeed for: {', '.join(failed)}")
+
+    artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
+    artifact_text = "\n".join(str(value) for value in artifacts.values())
+    required_content = ("退款政策文档仍有两个版本", "李明", "周五前", "王芳")
+    missing_content = [item for item in required_content if item not in artifact_text]
+    if missing_content:
+        raise AcceptanceError(f"model artifacts lost required source facts: {', '.join(missing_content)}")
+    if "材料未披露明确风险" in artifact_text:
+        raise AcceptanceError("explicit source risk was replaced by a missing-risk fallback")
+    if "负责人：本周进展" in artifact_text or "| 本周进展 |" in artifact_text:
+        raise AcceptanceError("field label '本周进展' was incorrectly emitted as an owner")
+
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), list) else []
+    evidence_ids = {str(item.get("id") or "") for item in evidence if isinstance(item, dict)}
+    referenced_ids = set(re.findall(r"\[(E\d+)\]", artifact_text))
+    if not referenced_ids or not referenced_ids.issubset(evidence_ids):
+        raise AcceptanceError("artifact citations are missing or do not map to returned Evidence")
     return execution
 
 
@@ -89,6 +107,16 @@ class Client:
             return json.loads(raw.decode("utf-8")), status
         return raw, status
 
+    def request_status(self, method: str, path: str) -> tuple[int, bytes]:
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", headers=dict(self.headers), method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                return int(response.status), response.read()
+        except urllib.error.HTTPError as error:
+            return int(error.code), error.read()
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate the deployed DocFlow real-model path.")
@@ -118,6 +146,13 @@ def main() -> int:
     )
     execution = validate_model_run(task)
 
+    export_path = f"/api/docflow/tasks/{task['id']}/export"
+    pre_review_status, _ = client.request_status("GET", export_path)
+    if pre_review_status != 409:
+        raise AcceptanceError(
+            f"export before human review returned HTTP {pre_review_status}, expected 409"
+        )
+
     review, _ = client.request(
         "POST",
         f"/api/docflow/tasks/{task['id']}/review",
@@ -125,7 +160,7 @@ def main() -> int:
     )
     if review.get("status") != "approved":
         raise AcceptanceError("human-review endpoint did not approve the task")
-    exported, status = client.request("GET", f"/api/docflow/tasks/{task['id']}/export")
+    exported, status = client.request("GET", export_path)
     if status != 200 or not isinstance(exported, bytes) or len(exported) < 20:
         raise AcceptanceError("approved artifact export failed")
 
