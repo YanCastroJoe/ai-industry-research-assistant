@@ -80,6 +80,10 @@ def _item_text(item: dict[str, Any], kind: str) -> str:
     return str(item.get("risk" if kind == "risk" else "content") or "")
 
 
+def _without_whitespace(value: str) -> str:
+    return "".join(value.split())
+
+
 def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: str) -> dict[str, Any]:
     evidence = result.get("evidence") if isinstance(result.get("evidence"), list) else []
     evidence_map = {
@@ -112,6 +116,8 @@ def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: s
                 "found": matched is not None,
                 "owner_exact": bool(matched) and matched.get("owner") == requirement["owner"],
                 "due_exact": bool(matched) and matched.get("due") == requirement["due"],
+                "observed_owner": matched.get("owner") if matched else None,
+                "observed_due": matched.get("due") if matched else None,
             }
         )
 
@@ -135,6 +141,11 @@ def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: s
             and execution.get("content_mode") == "rules"
             and int(execution.get("model_call_count") or 0) == 0
         )
+    compact_artifact = _without_whitespace(artifact_text)
+    required_facts_preserved = all(
+        _without_whitespace(str(fragment)) in compact_artifact
+        for fragment in case.get("required_artifact_fragments", [])
+    )
 
     dimensions = {
         "mode_valid": mode_valid,
@@ -146,6 +157,7 @@ def score_result(result: dict[str, Any], case: dict[str, Any], requested_mode: s
         "bindings_found": all(item["found"] for item in binding_checks),
         "owners_exact": all(item["owner_exact"] for item in binding_checks),
         "dates_exact": all(item["due_exact"] for item in binding_checks),
+        "required_facts_preserved": required_facts_preserved,
     }
     passed_dimensions = sum(bool(value) for value in dimensions.values())
     return {
@@ -287,6 +299,11 @@ def main() -> int:
     args = parser.parse_args()
     if args.repeats < 1 or args.repeats > 10:
         raise EvaluationError("--repeats must be between 1 and 10")
+    # Match the application startup convention for local runs without ever
+    # printing the loaded secret. Existing process environment remains primary.
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env", override=False)
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     report = evaluate(cases, args.repeats)
     if args.output:

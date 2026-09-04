@@ -175,7 +175,8 @@ def _sentences(text: str) -> list[str]:
     normalized = re.sub(r"[ \t]+", " ", text.replace("\r\n", "\n")).strip()
     # Keep semicolon-delimited fields on the same evidence row so that
     # “risk; owner; due” remains one auditable entity.
-    chunks = re.split(r"(?<=[。！？.!?])\s*|\n+", normalized)
+    # An ASCII period between digits is a decimal separator, not a boundary.
+    chunks = re.split(r"(?<=[。！？!?])\s*|(?<!\d)\.(?!\d)\s*|\n+", normalized)
     return [chunk.strip(" -•\t") for chunk in chunks if len(chunk.strip(" -•\t")) >= 4]
 
 
@@ -379,7 +380,7 @@ def _extract_owner_due(text: str) -> tuple[str, str]:
     )
     if not owner_match:
         owner_match = re.search(
-            r"(?:^|[，,；;。\s])(?P<owner>[\u4e00-\u9fff]{2,6})(?=负责(?:补充|提交|调整|统一|推进|跟进|修复|验证|测试|完成|确认|处理))",
+            r"(?:^|[，,；;。\s])(?P<owner>[\u4e00-\u9fff]{2,6})(?=负责(?:补充|补齐|准备|制定|整理|更新|执行|提交|调整|统一|推进|跟进|修复|验证|测试|完成|确认|处理))",
             text,
         )
     if not owner_match:
@@ -562,7 +563,7 @@ def _fallback_insights(
             explicit_milestone = field_label == "milestone" or (
                 field_label == "goal" and (due != "待确认" or any(word in text for word in MILESTONE_WORDS))
             )
-            if explicit_risk or _is_risk(text):
+            if explicit_risk or (_is_risk(text) and not explicit_action):
                 fact_risks.append({
                     "risk": text,
                     "level": _risk_level(text),

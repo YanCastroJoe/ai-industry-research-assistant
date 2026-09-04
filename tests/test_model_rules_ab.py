@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.evaluate_model_rules_ab import evaluation_mode, percentile, score_result, summarize
+from app.docflow import AgentRuntime
 
 
 class ModelRulesAbEvaluationTests(unittest.TestCase):
@@ -30,6 +31,7 @@ class ModelRulesAbEvaluationTests(unittest.TestCase):
             "memory": {"applied": 1},
         }
         case = {
+            "required_artifact_fragments": ["已完成"],
             "bindings": [
                 {"kind": "risk", "evidence_fragment": "证书尚未签发", "owner": "赵磊", "due": "9月8日前"},
                 {"kind": "action", "evidence_fragment": "补齐回滚脚本", "owner": "陈雪", "due": "9月7日前"},
@@ -39,6 +41,21 @@ class ModelRulesAbEvaluationTests(unittest.TestCase):
         self.assertTrue(score["passed"])
         result["insights"]["risks"][0]["due"] = "9月8日"
         self.assertFalse(score_result(result, case, "model")["passed"])
+
+    def test_rules_preserve_decimal_and_common_action_owners(self) -> None:
+        source = """本周进展：字段一致率达到99.6%。
+风险：证书尚未签发，负责人赵磊需在9月8日前完成申请。
+行动：陈雪负责补齐回滚脚本，9月7日前完成演练。
+行动：何川负责准备回滚数据包，9月9日前完成校验。
+行动：孙洁负责提交失败用例修复报告，周五前完成复测。"""
+        with patch.dict(os.environ, {"MODEL_API_KEY": ""}, clear=False):
+            result = AgentRuntime().execute("生成项目周报和风险清单", source)
+        owners = {item["owner"] for item in result["insights"]["actions"]}
+        self.assertTrue({"陈雪", "何川", "孙洁"}.issubset(owners))
+        self.assertIn("99.6%", result["artifacts"]["weekly_report_markdown"])
+        failed_report = next(item for item in result["insights"]["actions"] if item["owner"] == "孙洁")
+        self.assertIn("失败用例修复报告", failed_report["content"])
+        self.assertFalse(any("失败用例修复报告" in item["risk"] for item in result["insights"]["risks"]))
 
     def test_summary_uses_nearest_rank_percentiles_and_does_not_invent_cost(self) -> None:
         rows = []
