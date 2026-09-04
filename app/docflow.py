@@ -712,6 +712,7 @@ def _field_supported(value: str, evidence_text: str) -> bool:
 def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str]]) -> dict[str, Any]:
     """Model output may organize evidence, but owners, dates and impacts must be grounded."""
     fact_map = {fact["citation"]: fact["claim"] for fact in facts}
+    fallback = _fallback_insights("", facts)
     for collection in ("risks", "actions"):
         for item in insights.get(collection, []):
             evidence_text = "\n".join(fact_map.get(citation, "") for citation in item.get("evidence_ids", []))
@@ -721,6 +722,35 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
                 item["due"] = "待确认"
             if collection == "risks" and item.get("impact") and not _field_supported(item["impact"], evidence_text):
                 item["impact"] = "影响待确认"
+
+    # Free-form model wording is useful for presentation, but an auditable risk
+    # row must still be supported by the evidence cited on that row. If a model
+    # paraphrase changes word order or adds an unsupported claim, restore the
+    # deterministic risk extracted from the same Evidence item.
+    grounded_risks: list[dict[str, Any]] = []
+    for item in insights.get("risks", []):
+        cited = set(item.get("evidence_ids", []))
+        evidence_text = "\n".join(fact_map.get(citation, "") for citation in cited)
+        topic = _risk_topic(item.get("risk", ""))
+        risk_supported = (
+            _compact_business_text(item.get("risk", "")) in _compact_business_text(evidence_text)
+            or (topic and topic in evidence_text)
+        )
+        if risk_supported:
+            grounded_risks.append(item)
+            continue
+        candidates = [
+            risk for risk in fallback.get("risks", [])
+            if cited.intersection(risk.get("evidence_ids", []))
+        ]
+        same_topic = [risk for risk in candidates if _risk_topic(risk.get("risk", "")) == topic]
+        replacement = same_topic[0] if same_topic else (candidates[0] if len(candidates) == 1 else None)
+        if replacement:
+            item["risk"] = replacement["risk"]
+            if item.get("impact") == "影响待确认":
+                item["impact"] = replacement["impact"]
+            grounded_risks.append(item)
+    insights["risks"] = grounded_risks or fallback["risks"]
 
     # A model may shorten an otherwise supported date (for example 周五前 -> 周五).
     # Labels in the source are authoritative, so restore the exact owner and due
@@ -739,6 +769,7 @@ def _enforce_grounded_fields(insights: dict[str, Any], facts: list[dict[str, str
             if len(matches) != 1:
                 continue
             requirement = matches[0]
+            item["risk" if kind == "risk" else "content"] = requirement["content"]
             if requirement["owner"] != "待确认":
                 item["owner"] = requirement["owner"]
             if requirement["due"] != "待确认":
@@ -905,52 +936,41 @@ def generate_risk_register(insights: dict[str, Any]) -> str:
 
 
 def generate_slide_outline(goal: str, insights: dict[str, Any]) -> str:
-    slides = insights.get("slide_outline", [])
-    if not slides:
-        ranked_risks = sorted(insights["risks"], key=_risk_priority, reverse=True)
-        priority_risks = ranked_risks[:2]
-        risk_content = "；".join(item["risk"] for item in priority_risks)
-        risk_citations = list(dict.fromkeys(citation for item in priority_risks for citation in item["evidence_ids"]))
-        confirmed_actions = [item for item in insights["actions"] if item["owner"] != "待确认" or item["due"] != "待确认"]
-        background = insights.get("background", [])
-        background_content = background[0]["content"] if background else goal
-        background_citations = background[0]["evidence_ids"] if background else []
-        progress_slide = {"title": "本周进展", "content": insights["progress"][0]["content"], "evidence_ids": insights["progress"][0]["evidence_ids"]}
-        risk_slide = {"title": "关键风险", "content": risk_content, "evidence_ids": risk_citations}
-        background_slide = {"title": "背景与目标", "content": f"{background_content}；目标：{goal}", "evidence_ids": background_citations}
-        conflict = insights.get("conflicts", [None])[0] if insights.get("conflicts") else None
-        conflict_slide = {
-            "title": "决策冲突",
-            "content": f"{conflict['conflict']}；{conflict['status']}",
-            "evidence_ids": conflict["evidence_ids"],
-        } if conflict else None
-        action = confirmed_actions[0] if confirmed_actions else None
-        action_slide = {
-            "title": "行动与责任",
-            "content": f"{action['owner']}于{action['due']}{action['content']}" if action else "负责人和截止时间仍待确认",
-            "evidence_ids": action["evidence_ids"] if action else [],
-        }
-        focus = insights.get("presentation", {}).get("focus", "balanced")
-        slides = {
-            "risk": [risk_slide, action_slide, progress_slide],
-            "progress": [progress_slide, background_slide, risk_slide],
-            "actions": [action_slide, risk_slide, progress_slide],
-            "balanced": [background_slide, progress_slide, risk_slide],
-        }[focus]
-        if conflict_slide:
-            slides = [conflict_slide, risk_slide, action_slide if focus == "actions" else progress_slide]
-    else:
-        focus = insights.get("presentation", {}).get("focus", "balanced")
-        keyword_order = {
-            "risk": ("风险", "行动", "进展"),
-            "progress": ("进展", "里程碑", "风险"),
-            "actions": ("行动", "负责人", "风险"),
-            "balanced": ("背景", "进展", "风险"),
-        }[focus]
-        slides = sorted(
-            slides,
-            key=lambda slide: next((index for index, keyword in enumerate(keyword_order) if keyword in slide.get("title", "")), len(keyword_order)),
-        )
+    # Compile slides from already grounded insights. Model-authored slide text can
+    # omit the highest-priority risk or loosen citations, so it is treated as an
+    # intermediate suggestion rather than a final deliverable.
+    ranked_risks = sorted(insights["risks"], key=_risk_priority, reverse=True)
+    priority_risks = ranked_risks[:2]
+    risk_content = "；".join(item["risk"] for item in priority_risks)
+    risk_citations = list(dict.fromkeys(citation for item in priority_risks for citation in item["evidence_ids"]))
+    confirmed_actions = [item for item in insights["actions"] if item["owner"] != "待确认" or item["due"] != "待确认"]
+    background = insights.get("background", [])
+    background_content = background[0]["content"] if background else goal
+    background_citations = background[0]["evidence_ids"] if background else []
+    progress_slide = {"title": "本周进展", "content": insights["progress"][0]["content"], "evidence_ids": insights["progress"][0]["evidence_ids"]}
+    risk_slide = {"title": "关键风险", "content": risk_content, "evidence_ids": risk_citations}
+    background_slide = {"title": "背景与目标", "content": f"{background_content}；目标：{goal}", "evidence_ids": background_citations}
+    conflict = insights.get("conflicts", [None])[0] if insights.get("conflicts") else None
+    conflict_slide = {
+        "title": "决策冲突",
+        "content": f"{conflict['conflict']}；{conflict['status']}",
+        "evidence_ids": conflict["evidence_ids"],
+    } if conflict else None
+    action = confirmed_actions[0] if confirmed_actions else None
+    action_slide = {
+        "title": "行动与责任",
+        "content": f"{action['owner']}于{action['due']}{action['content']}" if action else "负责人和截止时间仍待确认",
+        "evidence_ids": action["evidence_ids"] if action else [],
+    }
+    focus = insights.get("presentation", {}).get("focus", "balanced")
+    slides = {
+        "risk": [risk_slide, action_slide, progress_slide],
+        "progress": [progress_slide, background_slide, risk_slide],
+        "actions": [action_slide, risk_slide, progress_slide],
+        "balanced": [background_slide, progress_slide, risk_slide],
+    }[focus]
+    if conflict_slide:
+        slides = [conflict_slide, risk_slide, action_slide if focus == "actions" else progress_slide]
     lines = ["## 三页汇报大纲", ""]
     for index, slide in enumerate(slides[:3], start=1):
         lines.append(f"{index}. {slide['title']}：{slide['content']} {_references(slide['evidence_ids'])}")

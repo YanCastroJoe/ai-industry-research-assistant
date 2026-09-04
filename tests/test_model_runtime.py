@@ -6,7 +6,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from app.docflow import AgentRuntime, _enforce_grounded_fields, extract_facts, retrieve_documents
+from app.docflow import AgentRuntime, _enforce_grounded_fields, extract_facts, generate_slide_outline, retrieve_documents
 from app.docflow_repository import DocflowRepository
 from app.model_client import model_runtime_status
 from app.planning import build_rule_plan
@@ -116,6 +116,62 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertEqual(grounded["risks"][0]["owner"], "李明")
         self.assertEqual(grounded["actions"][0]["due"], "下周二")
         self.assertEqual(grounded["actions"][0]["owner"], "王芳")
+        self.assertEqual(grounded["risks"][0]["risk"], "退款政策文档仍有两个版本")
+        self.assertEqual(grounded["actions"][0]["content"], "王芳负责补充退货运费边界案例，下周二完成回归测试")
+
+    def test_unsupported_model_risk_is_removed_when_cited_fact_is_not_a_risk(self):
+        facts = [
+            {"citation": "E1", "claim": "风险：生产证书尚未签发，负责人赵磊需在9月8日前完成申请。"},
+            {"citation": "E2", "claim": "会议结论：未通过回滚演练不得进入生产切换。"},
+        ]
+        insights = {
+            "risks": [
+                {
+                    "risk": "生产证书尚未签发",
+                    "impact": "影响待确认",
+                    "owner": "赵磊",
+                    "due": "9月8日前",
+                    "evidence_ids": ["E1"],
+                },
+                {
+                    "risk": "回滚演练未通过，不得进入生产切换。",
+                    "impact": "影响待确认",
+                    "owner": "待确认",
+                    "due": "待确认",
+                    "evidence_ids": ["E2"],
+                },
+            ],
+            "actions": [],
+        }
+
+        grounded = _enforce_grounded_fields(insights, facts)
+
+        self.assertEqual(len(grounded["risks"]), 1)
+        self.assertEqual(grounded["risks"][0]["risk"], "生产证书尚未签发")
+
+    def test_slide_outline_ignores_model_draft_and_keeps_priority_risk(self):
+        insights = {
+            "background": [{"content": "支付网关升级", "evidence_ids": ["E1"]}],
+            "progress": [{"content": "完成灰度部署", "evidence_ids": ["E2"]}],
+            "risks": [{
+                "risk": "生产证书尚未签发",
+                "level": "高",
+                "impact": "影响待确认",
+                "owner": "赵磊",
+                "due": "9月8日前",
+                "evidence_ids": ["E3"],
+            }],
+            "actions": [],
+            "conflicts": [],
+            "slide_outline": [{"title": "普通进展", "content": "只展示完成项", "evidence_ids": ["E2"]}],
+            "presentation": {"focus": "balanced"},
+        }
+
+        outline = generate_slide_outline("生成三页管理层汇报", insights)
+
+        self.assertIn("生产证书尚未签发", outline)
+        self.assertIn("[E3]", outline)
+        self.assertNotIn("只展示完成项", outline)
 
     def test_real_model_path_records_two_calls_tokens_cost_and_request_ids(self):
         environment = {
