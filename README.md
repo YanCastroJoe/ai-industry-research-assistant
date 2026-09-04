@@ -94,19 +94,24 @@ flowchart TD
 
 # 依赖一致性
 .\.venv\Scripts\python.exe -m pip check
+
+# M2：60 组模型/规则受控配对 A/B（需配置模型）
+.\.venv\Scripts\python.exe -X utf8 scripts\evaluate_model_rules_ab.py --cases evaluation\docflow_model_rules_ab_cases_60.json --mode paired --require-m2-suite --output evaluation\reports\docflow-model-rules-m2-cloud.json
 ```
 
 2026-09-04 回归与云端验收结果：
 
-- DocFlow 测试套件：82 项通过。
+- DocFlow 测试套件：99 项通过。
 - 固定合成任务：20/20 通过。
+- M2 受控配对 A/B：模型模式 60/60、规则模式 60/60；60 对输入与 Evidence 一致，模型路径 0 次降级、0 次重试。
+- M2 模型路径完成 120 次真实调用，共记录 116,006 Tokens；P50 4.45 秒、P95 5.79 秒。规则路径 P50 2.59 ms、P95 3.76 ms；因未配置单价，不报告估算成本。
 - 覆盖 10 次连续运行、6 次并发运行、幂等提交、任务删除、损坏 PDF、Memory、Trace、Checkpoint、审核与导出。
 - 覆盖显式风险/行动/进展字段绑定、负责人和日期保留、Verifier 独立缺失检查、访客会话隔离、认证与限流。
 - 合成检索故障在第 2 次尝试恢复。
 - 云端隔离实例与正式实例分别通过一次强制模型验收：Planner 和内容生成均返回提供方请求 ID、Token 与模型耗时，未发生规则降级；审核前导出受阻，审核通过后导出成功。
 - 公网入口未认证返回 HTTP 401，认证后首页与 `/ready` 均返回 HTTP 200。
 
-上述结果只代表当前固定合成回归集和小样本部署验收，不代表生产准确率或 SLA。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md) 与 [真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md)。
+上述结果只代表当前固定合成回归集和云端受控配对验收，不代表生产准确率或 SLA；两条路径在工程硬门禁下打平，尚未采集真人盲评偏好和人工修改率。详细口径见 [固定集评测报告](evaluation/reports/docflow-v2-2026-08-07.md)、[真实模型运行验收](evaluation/reports/docflow-model-runtime-2026-09-04.md) 与 [M2 配对评测报告](evaluation/reports/docflow-model-rules-m2-2026-09-04.md)。
 
 ## 本地复现
 

@@ -1,0 +1,79 @@
+{
+  "schema_version": "docflow_model_rules_ab_m2_summary_v1",
+  "generated_at": "2026-09-04T06:01:16.732241+00:00",
+  "release_commit": "8a77d3b",
+  "environment": "cloud_isolated_demo",
+  "model_name": "deepseek-chat",
+  "scope": "fixed_synthetic_regression_not_production_accuracy_or_sla",
+  "case_count": 60,
+  "pair_count": 60,
+  "category_distribution": {
+    "fixed_regression": 20,
+    "colloquial_complex_date": 15,
+    "multi_risk_conflict": 10,
+    "prompt_injection": 5,
+    "insufficient_information": 5,
+    "long_noisy": 5
+  },
+  "controlled_pairing": {
+    "same_goal_source_memory_context_and_evidence_budget": true,
+    "paired_inputs_preserved": true,
+    "distinct_output_pairs": 60
+  },
+  "model": {
+    "runs": 60,
+    "passed": 60,
+    "pass_rate": 1.0,
+    "degraded_runs": 0,
+    "retry_count": 0,
+    "model_calls": 120,
+    "latency_ms": {
+      "mean": 4598.15,
+      "p50": 4449.97,
+      "p95": 5790.24
+    },
+    "model_latency_ms": {
+      "mean": 4593.17,
+      "p50": 4446.0,
+      "p95": 5786.0
+    },
+    "tokens": {
+      "prompt": 75215,
+      "completion": 40791,
+      "total": 116006
+    },
+    "estimated_cost": null
+  },
+  "rules": {
+    "runs": 60,
+    "passed": 60,
+    "pass_rate": 1.0,
+    "degraded_runs": 0,
+    "retry_count": 0,
+    "latency_ms": {
+      "mean": 2.77,
+      "p50": 2.59,
+      "p95": 3.76
+    }
+  },
+  "paired_hard_gate_comparison": {
+    "model_wins": 0,
+    "ties": 60,
+    "rules_wins": 0,
+    "human_blind_preference": "not_collected",
+    "human_review_modification_rate": "not_collected"
+  },
+  "category_passes": {
+    "fixed_regression": {"model": "20/20", "rules": "20/20"},
+    "colloquial_complex_date": {"model": "15/15", "rules": "15/15"},
+    "multi_risk_conflict": {"model": "10/10", "rules": "10/10"},
+    "prompt_injection": {"model": "5/5", "rules": "5/5"},
+    "insufficient_information": {"model": "5/5", "rules": "5/5"},
+    "long_noisy": {"model": "5/5", "rules": "5/5"}
+  },
+  "raw_report": {
+    "server_path": "/opt/agent-demos/docflow/evaluation/reports/docflow-model-rules-m2-cloud-8a77d3b.json",
+    "bytes": 373475,
+    "sha256": "e1dd434e5a605568b4a64a6af4af9489a7c8c8b42e61eefd07cf5ca20cadb47a"
+  }
+}
